@@ -1,3 +1,22 @@
+Famo.us CommonJS
+================
+
+
+This version of Famo.us has been converted to CommonJS format and is ready for use with tools like [browserify](http://browserify.org/) and [commonjs-everywhere](https://github.com/michaelficarra/commonjs-everywhere).  The only changes are:
+
+1. Removing the `define` block from each file
+*  Unindenting the code in the `define` block
+*  Modifying `require` calls to use relative paths (in cases where AMD root paths were used)
+*  Adding this `Famo.us CommonJS` section to the root `README.md`.
+   Below this section is the unaltered readme from the [official (AMD) Famo.us repo](https://github.com/Famous/famous)
+
+A browserify example is in the `example` folder. The built file was generated with:
+
+1. `npm install -g browserify` (if not already installed)
+*  `browserify example/browserify-app.js > example/browserify-built.js`
+
+It brings in all used modules into a file, ready for minimization.  See browserify for information on source map support if desired.
+
 Famo.us
 =======
 
