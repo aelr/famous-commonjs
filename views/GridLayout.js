@@ -186,13 +186,12 @@ GridLayout.prototype.commit = function commit(context) {
     }
 
     if (size) transform = Transform.moveThen([-size[0]*origin[0], -size[1]*origin[1], 0], transform);
-    var nextSpec = {
+    return {
         transform: transform,
         opacity: opacity,
         size: size,
         target: result
     };
-    return nextSpec;
 };
 
 module.exports = GridLayout;

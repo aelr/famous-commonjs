@@ -15,7 +15,7 @@ var Utility = require('../utilities/Utility');
 
 /**
  * SequentialLayout will lay out a collection of renderables sequentially in the specified direction.
- * @class ScrollContainer
+ * @class SequentialLayout
  * @constructor
  * @param {Options} [options] An object of configurable options.
  * @param {Number} [options.direction=Utility.Direction.Y] Using the direction helper found in the famous Utility
@@ -88,7 +88,7 @@ SequentialLayout.prototype.setOptions = function setOptions(options) {
 
 /**
  * setOutputFunction is used to apply a user-defined output transform on each processed renderable.
- * For a good example, check out SequentialLayout's own DEFAULT_OUTPUT_FUNCTION in the code.
+ *  For a good example, check out SequentialLayout's own DEFAULT_OUTPUT_FUNCTION in the code.
  *
  * @method setOptions
  * @param {Function} outputFunction An output processer for each renderable in the SequentialLayout

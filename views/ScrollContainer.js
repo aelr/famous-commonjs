@@ -22,7 +22,7 @@ var OptionsManager = require('../core/OptionsManager');
  * @class ScrollContainer
  * @constructor
  * @param {Options} [options] An object of configurable options.
- * @param {Options} [options.surface=undefined] Options for the ScrollContainer instance's surface.
+ * @param {Options} [options.container=undefined] Options for the ScrollContainer instance's surface.
  * @param {Options} [options.scrollview={direction:Utility.Direction.X}]  Options for the ScrollContainer instance's scrollview.
  */
 function ScrollContainer(options) {
@@ -34,7 +34,7 @@ function ScrollContainer(options) {
     this.container = new ContainerSurface(this.options.container);
     this.scrollview = new Scrollview(this.options.scrollview);
 
-    this.surface.add(this.scrollview);
+    this.container.add(this.scrollview);
 
     EventHandler.setInputHandler(this, this.scrollview);
     EventHandler.setOutputHandler(this, this.scrollview);

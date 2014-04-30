@@ -13,7 +13,7 @@ var Vector = require('../../math/Vector');
 
 /**
  *  Allows for two circular bodies to collide and bounce off each other.
- *  
+ *
  *
  *  @class Collision
  *  @constructor

@@ -50,7 +50,7 @@ function Deck(options) {
                 transform: Transform.rotateZ(amount),
                 origin: [0.5, 0.5],
                 target: output
-            }
+            };
         }
         return {
             transform: positionMatrix,
@@ -58,7 +58,7 @@ function Deck(options) {
             target: output
         };
     });
-};
+}
 Deck.prototype = Object.create(SequentialLayout.prototype);
 Deck.prototype.constructor = Deck;
 

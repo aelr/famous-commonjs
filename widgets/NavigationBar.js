@@ -80,11 +80,11 @@ function NavigationBar(options) {
 
     this._add(this.layout);
 
-    this.optionsManager.on('change', function(event) {
+    this._optionsManager.on('change', function(event) {
         var key = event.id;
         var data = event.value;
         if (key === 'size') {
-            this.layout.id['master'].setSize(data);
+            this.layout.id.master.setSize(data);
             this.title.setSize(data);
             this.back.setSize([data[1], data[1]]);
             this.more.setSize([data[1], data[1]]);

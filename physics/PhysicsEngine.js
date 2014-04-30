@@ -16,7 +16,7 @@ var EventHandler = require('../core/EventHandler');
  *
  * @class PhysicsEngine
  * @constructor
- * @param optoins {Object} options
+ * @param options {Object} options
  */
 function PhysicsEngine(options) {
     this.options = Object.create(PhysicsEngine.DEFAULT_OPTIONS);

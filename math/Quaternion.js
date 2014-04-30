@@ -299,7 +299,6 @@ Quaternion.prototype.dot = function dot(q) {
     return this.w * q.w + this.x * q.x + this.y * q.y + this.z * q.z;
 };
 
-
 /**
  * Doc: TODO
  *

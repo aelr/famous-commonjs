@@ -54,7 +54,7 @@ Walls.DEFAULT_OPTIONS = {
      * @attribute sides
      * @default [Walls.LEFT, Walls.RIGHT, Walls.TOP, Walls.BOTTOM];
      */
-    sides : Walls.TWO_DIMENSIONAL,
+    sides : Walls.SIDES.TWO_DIMENSIONAL,
 
     /**
      * The size of the bounding box of the walls

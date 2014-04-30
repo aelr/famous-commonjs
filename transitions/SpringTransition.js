@@ -7,6 +7,8 @@
  * @copyright Famous Industries, Inc. 2014
  */
 
+/*global console*/
+
 
 var PE = require('../physics/PhysicsEngine');
 var Particle = require('../physics/bodies/Particle');
@@ -138,6 +140,8 @@ function _update() {
 }
 
 function _setupDefinition(definition) {
+    // TODO fix no-console error
+    /* eslint no-console: 0 */
     var defaults = SpringTransition.DEFAULT_OPTIONS;
     if (definition.period === undefined)       definition.period       = defaults.period;
     if (definition.dampingRatio === undefined) definition.dampingRatio = defaults.dampingRatio;

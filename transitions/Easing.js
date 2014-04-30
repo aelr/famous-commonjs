@@ -108,7 +108,7 @@ var Easing = {
     },
 
     /**
-     * @property inQuad
+     * @property inOutQuint
      * @static
      */
     inOutQuint: function(t) {
