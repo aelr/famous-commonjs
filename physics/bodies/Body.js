@@ -99,6 +99,7 @@ Body.prototype.toWorldCoordinates = function toWorldCoordinates(localPosition) {
 /**
  * Calculates the kinetic and intertial energy of a body.
  *
+ * @method getEnergy
  * @return energy {Number}
  */
 Body.prototype.getEnergy = function getEnergy() {
@@ -110,6 +111,7 @@ Body.prototype.getEnergy = function getEnergy() {
  * Extends Particle.reset to reset orientation, angular velocity
  * and angular momentum.
  *
+ * @method reset
  * @param [p] {Array|Vector} position
  * @param [v] {Array|Vector} velocity
  * @param [q] {Array|Quaternion} orientation
@@ -125,6 +127,7 @@ Body.prototype.reset = function reset(p, v, q, L) {
 /**
  * Setter for orientation
  *
+ * @method setOrientation
  * @param q {Array|Quaternion} orientation
  */
 Body.prototype.setOrientation = function setOrientation(q) {
@@ -134,6 +137,7 @@ Body.prototype.setOrientation = function setOrientation(q) {
 /**
  * Setter for angular velocity
  *
+ * @method setAngularVelocity
  * @param w {Array|Vector} angular velocity
  */
 Body.prototype.setAngularVelocity = function setAngularVelocity(w) {
@@ -144,6 +148,7 @@ Body.prototype.setAngularVelocity = function setAngularVelocity(w) {
 /**
  * Setter for angular momentum
  *
+ * @method setAngularMomentum
  * @param L {Array|Vector} angular momentum
  */
 Body.prototype.setAngularMomentum = function setAngularMomentum(L) {

@@ -13,14 +13,14 @@ var EventHandler = require('../core/EventHandler');
 var RenderController = require('../views/RenderController');
 
 /**
- * A view for transistioning between two surfaces based
+ * A view for transitioning between two surfaces based
  *  on a 'on' and 'off' state
  *
  * @class TabBar
  * @extends View
  * @constructor
  *
- * @param {object} options overrides of deault options
+ * @param {object} options overrides of default options
  */
 function ToggleButton(options) {
     this.options = {
@@ -76,7 +76,7 @@ ToggleButton.prototype.select = function select() {
 };
 
 /**
- * Transition towards the 'f' state and dispatch an event to
+ * Transition towards the 'off' state and dispatch an event to
  *  listeners to announce it was deselected
  *
  * @method deselect

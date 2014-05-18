@@ -11,8 +11,6 @@
 var Matrix = require('./Matrix');
 
 /**
- * Docs: TODO
- *
  * @class Quaternion
  * @constructor
  *

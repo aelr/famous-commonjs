@@ -61,7 +61,7 @@ EventHandler.setOutputHandler = function setOutputHandler(object, handler) {
     object.pipe = handler.pipe.bind(handler);
     object.unpipe = handler.unpipe.bind(handler);
     object.on = handler.on.bind(handler);
-    object.addListener = handler.on;
+    object.addListener = object.on;
     object.removeListener = handler.removeListener.bind(handler);
 };
 

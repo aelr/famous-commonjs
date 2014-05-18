@@ -19,21 +19,25 @@ var clickThreshold = 300;
 var clickWindow = 500;
 var potentialClicks = {};
 var recentlyDispatched = {};
+var _now = Date.now;
+
 window.addEventListener('touchstart', function(event) {
-    var timestamp = Date.now();
+    var timestamp = _now();
     for (var i = 0; i < event.changedTouches.length; i++) {
         var touch = event.changedTouches[i];
         potentialClicks[touch.identifier] = timestamp;
     }
 });
+
 window.addEventListener('touchmove', function(event) {
     for (var i = 0; i < event.changedTouches.length; i++) {
         var touch = event.changedTouches[i];
         delete potentialClicks[touch.identifier];
     }
 });
+
 window.addEventListener('touchend', function(event) {
-    var currTime = Date.now();
+    var currTime = _now();
     for (var i = 0; i < event.changedTouches.length; i++) {
         var touch = event.changedTouches[i];
         var startTime = potentialClicks[touch.identifier];
@@ -48,8 +52,9 @@ window.addEventListener('touchend', function(event) {
         delete potentialClicks[touch.identifier];
     }
 });
+
 window.addEventListener('click', function(event) {
-    var currTime = Date.now();
+    var currTime = _now();
     for (var i in recentlyDispatched) {
         var previousEvent = recentlyDispatched[i];
         if (currTime - i < clickWindow) {
@@ -58,3 +63,4 @@ window.addEventListener('click', function(event) {
         else delete recentlyDispatched[i];
     }
 }, true);
+

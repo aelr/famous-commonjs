@@ -186,7 +186,7 @@ RenderController.prototype.show = function show(renderable, transition, callback
     }
 
     if (this._showing >= 0) {
-        if (this.options.overlap) this.hide(callback);
+        if (this.options.overlap) this.hide();
         else {
             if (this._nextRenderable) {
                 this._nextRenderable = renderable;
