@@ -143,6 +143,7 @@ Transitionable.prototype.set = function set(endState, transition, callback) {
 Transitionable.prototype.reset = function reset(startState, startVelocity) {
     this._currentMethod = null;
     this._engineInstance = null;
+    this._callback = undefined;
     this.state = startState;
     this.velocity = startVelocity;
     this.currentAction = null;
@@ -160,11 +161,12 @@ Transitionable.prototype.reset = function reset(startState, startVelocity) {
  *    completion (t=1)
  */
 Transitionable.prototype.delay = function delay(duration, callback) {
-    this.set(this._engineInstance.get(), {duration: duration,
+    this.set(this.get(), {duration: duration,
         curve: function() {
             return 0;
         }},
-        callback);
+        callback
+    );
 };
 
 /**

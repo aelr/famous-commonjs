@@ -194,10 +194,12 @@ GridLayout.prototype.commit = function commit(context) {
             this._states.splice(currIndex, 1);
         }
         if (item) {
-            result[currIndex] = modifier.modify({
-                origin: origin,
-                target: item.render()
-            });
+            result.push(
+                modifier.modify({
+                    origin: origin,
+                    target: item.render()
+                })
+            );
         }
         sequence = sequence.getNext();
         currIndex++;

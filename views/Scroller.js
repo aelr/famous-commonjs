@@ -214,6 +214,7 @@ Scroller.prototype.commit = function commit(context) {
 
     return {
         transform: Transform.multiply(transform, scrollTransform),
+        size: size,
         opacity: opacity,
         origin: origin,
         target: this.group.render()

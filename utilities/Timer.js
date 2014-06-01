@@ -184,9 +184,8 @@ function debounce(func, wait) {
             }
         };
 
-        if (!timeout) {
-            timeout = setTimeout(fn, wait);
-        }
+        clear(timeout);
+        timeout = setTimeout(fn, wait);
 
         return result;
     };

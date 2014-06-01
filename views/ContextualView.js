@@ -23,7 +23,7 @@ var OptionsManager = require('../core/OptionsManager');
  * @param {Options} [options] An object of configurable options.
  */
 function ContextualView(options) {
-    this.options = Object.create(ContextualView.DEFAULT_OPTIONS);
+    this.options = Object.create(this.constructor.DEFAULT_OPTIONS || ContextualView.DEFAULT_OPTIONS);
     this._optionsManager = new OptionsManager(this.options);
     if (options) this.setOptions(options);
 

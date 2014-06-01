@@ -51,7 +51,8 @@ ScaleSync.prototype._startUpdate = function _startUpdate(event) {
     this._eventOutput.emit('start', {
         count: event.touches.length,
         touches: [this.touchAId, this.touchBId],
-        distance: this._startDist
+        distance: this._startDist,
+        center: TwoFingerSync.calculateCenter(this.posA, this.posB)
     });
 };
 
@@ -60,6 +61,8 @@ ScaleSync.prototype._moveUpdate = function _moveUpdate(diffTime) {
     var scale = this.options.scale;
 
     var currDist = TwoFingerSync.calculateDistance(this.posA, this.posB);
+    var center = TwoFingerSync.calculateCenter(this.posA, this.posB);
+
     var delta = (currDist - this._startDist) / this._startDist;
     var newScaleFactor = Math.max(1 + scale * delta, 0);
     var veloScale = (newScaleFactor - this._scaleFactor) / diffTime;
@@ -69,6 +72,7 @@ ScaleSync.prototype._moveUpdate = function _moveUpdate(diffTime) {
         scale: newScaleFactor,
         velocity: veloScale,
         distance: currDist,
+        center : center,
         touches: [this.touchAId, this.touchBId]
     });
 

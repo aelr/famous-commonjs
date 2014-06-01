@@ -233,7 +233,7 @@ Surface.prototype.getClassList = function getClassList() {
  *    causes a re-rendering if the content has changed.
  *
  * @method setContent
- * @param {string} content HTML content
+ * @param {string|Document Fragment} content HTML content
  */
 Surface.prototype.setContent = function setContent(content) {
     if (this.content !== content) {
