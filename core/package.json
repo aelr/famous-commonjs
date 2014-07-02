@@ -1,6 +1,6 @@
 {
   "name": "famous-core",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "The low level componentry of Famo.us, including the required CSS stylesheet.",
   "scripts": {
     "test": "grunt test"
@@ -24,8 +24,5 @@
     "grunt-jscs-checker": "^0.4.1",
     "load-grunt-tasks": "^0.4.0",
     "time-grunt": "^0.3.1"
-  },
-  "scripts": {
-    "test": "grunt test"
   }
 }

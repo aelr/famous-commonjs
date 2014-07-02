@@ -2849,11 +2849,11 @@ define('famous/core/Engine',['require','exports','module','./Context','./EventHa
     function loop() {
         if (options.runLoop) {
             Engine.step();
-            requestAnimationFrame(loop);
+            window.requestAnimationFrame(loop);
         }
         else loopEnabled = false;
     }
-    requestAnimationFrame(loop);
+    window.requestAnimationFrame(loop);
 
     //
     // Upon main document window resize (unless on an "input" HTML element):
@@ -3085,7 +3085,7 @@ define('famous/core/Engine',['require','exports','module','./Context','./EventHa
             // kick off the loop only if it was stopped
             if (!loopEnabled && data.value) {
                 loopEnabled = true;
-                requestAnimationFrame(loop);
+                window.requestAnimationFrame(loop);
             }
         }
     });
@@ -4432,7 +4432,7 @@ define('famous/core/Scene',['require','exports','module','./Transform','./Modifi
      *
      * @class Scene
      * @constructor
-     * @param {Object} definition in the format of a render spec.
+     * @param {Object|Array|Spec} definition in the format of a render spec.
      */
     function Scene(definition) {
         this.id = null;
@@ -4484,6 +4484,7 @@ define('famous/core/Scene',['require','exports','module','./Transform','./Modifi
         var transformDefinition = definition.transform;
         var opacity = definition.opacity;
         var origin = definition.origin;
+        var align = definition.align;
         var size = definition.size;
         var transform = Transform.identity;
         if (transformDefinition instanceof Array) {
@@ -4504,6 +4505,7 @@ define('famous/core/Scene',['require','exports','module','./Transform','./Modifi
             transform: transform,
             opacity: opacity,
             origin: origin,
+            align: align,
             size: size
         });
         return result;
@@ -4984,48 +4986,346 @@ define('famous/core/ViewSequence',['require','exports','module'],function(requir
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
+ * Owner: david@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+define('famous/events/EventArbiter',['require','exports','module','famous/core/EventHandler'],function(require, exports, module) {
+    var EventHandler = require('famous/core/EventHandler');
+
+    /**
+     * A switch which wraps several event destinations and
+     *  redirects received events to at most one of them.
+     *  Setting the 'mode' of the object dictates which one
+     *  of these destinations will receive events.
+     *
+     * @class EventArbiter
+     * @constructor
+     *
+     * @param {Number | string} startMode initial setting of switch,
+     */
+    function EventArbiter(startMode) {
+        this.dispatchers = {};
+        this.currMode = undefined;
+        this.setMode(startMode);
+    }
+
+    /**
+     * Set switch to this mode, passing events to the corresponding
+     *   EventHandler.  If mode has changed, emits 'change' event,
+     *   emits 'unpipe' event to the old mode's handler, and emits 'pipe'
+     *   event to the new mode's handler.
+     *
+     * @method setMode
+     *
+     * @param {string | number} mode indicating which event handler to send to.
+     */
+    EventArbiter.prototype.setMode = function setMode(mode) {
+        if (mode !== this.currMode) {
+            var startMode = this.currMode;
+
+            if (this.dispatchers[this.currMode]) this.dispatchers[this.currMode].trigger('unpipe');
+            this.currMode = mode;
+            if (this.dispatchers[mode]) this.dispatchers[mode].emit('pipe');
+            this.emit('change', {from: startMode, to: mode});
+        }
+    };
+
+    /**
+     * Return the existing EventHandler corresponding to this
+     *   mode, creating one if it doesn't exist.
+     *
+     * @method forMode
+     *
+     * @param {string | number} mode mode to which this eventHandler corresponds
+     *
+     * @return {EventHandler} eventHandler corresponding to this mode
+     */
+    EventArbiter.prototype.forMode = function forMode(mode) {
+        if (!this.dispatchers[mode]) this.dispatchers[mode] = new EventHandler();
+        return this.dispatchers[mode];
+    };
+
+    /**
+     * Trigger an event, sending to currently selected handler, if
+     *   it is listening for provided 'type' key.
+     *
+     * @method emit
+     *
+     * @param {string} eventType event type key (for example, 'click')
+     * @param {Object} event event data
+     * @return {EventHandler} this
+     */
+    EventArbiter.prototype.emit = function emit(eventType, event) {
+        if (this.currMode === undefined) return false;
+        if (!event) event = {};
+        var dispatcher = this.dispatchers[this.currMode];
+        if (dispatcher) return dispatcher.trigger(eventType, event);
+    };
+
+    module.exports = EventArbiter;
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: david@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+define('famous/events/EventFilter',['require','exports','module','famous/core/EventHandler'],function(require, exports, module) {
+    var EventHandler = require('famous/core/EventHandler');
+
+    /**
+     * EventFilter regulates the broadcasting of events based on
+     *  a specified condition function of standard event type: function(type, data).
+     *
+     * @class EventFilter
+     * @constructor
+     *
+     * @param {function} condition function to determine whether or not
+     *    events are emitted.
+     */
+    function EventFilter(condition) {
+        EventHandler.call(this);
+        this._condition = condition;
+    }
+    EventFilter.prototype = Object.create(EventHandler.prototype);
+    EventFilter.prototype.constructor = EventFilter;
+
+    /**
+     * If filter condition is met, trigger an event, sending to all downstream handlers
+     *   listening for provided 'type' key.
+     *
+     * @method emit
+     *
+     * @param {string} type event type key (for example, 'click')
+     * @param {Object} data event data
+     * @return {EventHandler} this
+     */
+    EventFilter.prototype.emit = function emit(type, data) {
+        if (this._condition(type, data))
+            return EventHandler.prototype.emit.apply(this, arguments);
+    };
+
+    /**
+     * An alias of emit. Trigger determines whether to send
+     *  events based on the return value of it's condition function
+     *  when passed the event type and associated data.
+     *
+     * @method trigger
+     * @param {string} type name of the event
+     * @param {object} data associated data
+     */
+    EventFilter.prototype.trigger = EventFilter.prototype.emit;
+
+    module.exports = EventFilter;
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: david@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+define('famous/events/EventMapper',['require','exports','module','famous/core/EventHandler'],function(require, exports, module) {
+    var EventHandler = require('famous/core/EventHandler');
+
+    /**
+     * EventMapper routes events to various event destinations
+     *  based on custom logic.  The function signature is arbitrary.
+     *
+     * @class EventMapper
+     * @constructor
+     *
+     * @param {function} mappingFunction function to determine where
+     *  events are routed to.
+     */
+    function EventMapper(mappingFunction) {
+        EventHandler.call(this);
+        this._mappingFunction = mappingFunction;
+    }
+    EventMapper.prototype = Object.create(EventHandler.prototype);
+    EventMapper.prototype.constructor = EventMapper;
+
+    EventMapper.prototype.subscribe = null;
+    EventMapper.prototype.unsubscribe = null;
+
+    /**
+     * Trigger an event, sending to all mapped downstream handlers
+     *   listening for provided 'type' key.
+     *
+     * @method emit
+     *
+     * @param {string} type event type key (for example, 'click')
+     * @param {Object} data event data
+     * @return {EventHandler} this
+     */
+    EventMapper.prototype.emit = function emit(type, data) {
+        var target = this._mappingFunction.apply(this, arguments);
+        if (target && (target.emit instanceof Function)) target.emit(type, data);
+    };
+
+    /**
+     * Alias of emit.
+     * @method trigger
+     */
+    EventMapper.prototype.trigger = EventMapper.prototype.emit;
+
+    module.exports = EventMapper;
+
+
+define('famous/inputs/Accumulator',['require','exports','module','famous/core/EventHandler','famous/transitions/Transitionable'],function(require, exports, module) {
+    var EventHandler = require('famous/core/EventHandler');
+    var Transitionable = require('famous/transitions/Transitionable');
+
+    /**
+     * Accumulates differentials of event sources that emit a `delta`
+     *  attribute taking a Number or Array of Number types. The accumulated
+     *  value is stored in a getter/setter.
+     *
+     * @class Accumulator
+     * @constructor
+     * @param value {Number|Array|Transitionable}   Initializing value
+     * @param [eventName='update'] {String}         Name of update event
+     */
+    function Accumulator(value, eventName) {
+        if (eventName === undefined) eventName = 'update';
+
+        this._state = (value && value.get && value.set)
+            ? value
+            : new Transitionable(value || 0);
+
+        this._eventInput = new EventHandler();
+        EventHandler.setInputHandler(this, this._eventInput);
+
+        this._eventInput.on(eventName, _handleUpdate.bind(this));
+    }
+
+    function _handleUpdate(data) {
+        var delta = data.delta;
+        var state = this.get();
+
+        if (delta.constructor === state.constructor){
+            var newState = (delta instanceof Array)
+                ? [state[0] + delta[0], state[1] + delta[1]]
+                : state + delta;
+            this.set(newState);
+        }
+    }
+
+    /**
+     * Basic getter
+     *
+     * @method get
+     * @return {Number|Array} current value
+     */
+    Accumulator.prototype.get = function get() {
+        return this._state.get();
+    };
+
+    /**
+     * Basic setter
+     *
+     * @method set
+     * @param value {Number|Array} new value
+     */
+    Accumulator.prototype.set = function set(value) {
+        this._state.set(value);
+    };
+
+    module.exports = Accumulator;
+
+
+define('famous/inputs/DesktopEmulationMode',['require','exports','module'],function(require, exports, module) {
+    var hasTouch = 'ontouchstart' in window;
+
+    function kill(type) {
+        window.addEventListener(type, function(event) {
+            event.stopPropagation();
+            return false;
+        }, true);
+    }
+
+    if (hasTouch) {
+        kill('mousedown');
+        kill('mousemove');
+        kill('mouseup');
+        kill('mouseleave');
+    }
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
  * Owner: mark@famo.us
  * @license MPL 2.0
  * @copyright Famous Industries, Inc. 2014
  */
 
-define('famous/math/Utilities',['require','exports','module'],function(require, exports, module) {
+define('famous/inputs/FastClick',['require','exports','module'],function(require, exports, module) {
     /**
-     * A few static methods.
-     *
-     * @class Utilities
-     * @static
+     * FastClick is an override shim which maps event pairs of
+     *   'touchstart' and 'touchend' which differ by less than a certain
+     *   threshold to the 'click' event.
+     *   This is used to speed up clicks on some browsers.
      */
-    var Utilities = {};
+    if (!window.CustomEvent) return;
+    var clickThreshold = 300;
+    var clickWindow = 500;
+    var potentialClicks = {};
+    var recentlyDispatched = {};
+    var _now = Date.now;
 
-    /**
-     * Constrain input to range.
-     *
-     * @method clamp
-     * @param {Number} value input
-     * @param {Array.Number} range [min, max]
-     * @static
-     */
-    Utilities.clamp = function clamp(value, range) {
-        return Math.max(Math.min(value, range[1]), range[0]);
-    };
-
-    /**
-     * Euclidean length of numerical array.
-     *
-     * @method length
-     * @param {Array.Number} array array of numbers
-     * @static
-     */
-    Utilities.length = function length(array) {
-        var distanceSquared = 0;
-        for (var i = 0; i < array.length; i++) {
-            distanceSquared += array[i] * array[i];
+    window.addEventListener('touchstart', function(event) {
+        var timestamp = _now();
+        for (var i = 0; i < event.changedTouches.length; i++) {
+            var touch = event.changedTouches[i];
+            potentialClicks[touch.identifier] = timestamp;
         }
-        return Math.sqrt(distanceSquared);
-    };
+    });
 
-    module.exports = Utilities;
+    window.addEventListener('touchmove', function(event) {
+        for (var i = 0; i < event.changedTouches.length; i++) {
+            var touch = event.changedTouches[i];
+            delete potentialClicks[touch.identifier];
+        }
+    });
+
+    window.addEventListener('touchend', function(event) {
+        var currTime = _now();
+        for (var i = 0; i < event.changedTouches.length; i++) {
+            var touch = event.changedTouches[i];
+            var startTime = potentialClicks[touch.identifier];
+            if (startTime && currTime - startTime < clickThreshold) {
+                var clickEvt = new window.CustomEvent('click', {
+                    'bubbles': true,
+                    'detail': touch
+                });
+                recentlyDispatched[currTime] = event;
+                event.target.dispatchEvent(clickEvt);
+            }
+            delete potentialClicks[touch.identifier];
+        }
+    });
+
+    window.addEventListener('click', function(event) {
+        var currTime = _now();
+        for (var i in recentlyDispatched) {
+            var previousEvent = recentlyDispatched[i];
+            if (currTime - i < clickWindow) {
+                if (event instanceof window.MouseEvent && event.target === previousEvent.target) event.stopPropagation();
+            }
+            else delete recentlyDispatched[i];
+        }
+    }, true);
 
 
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -5388,6 +5688,633 @@ define('famous/inputs/MouseSync',['require','exports','module','famous/core/Even
  * @copyright Famous Industries, Inc. 2014
  */
 
+define('famous/inputs/TwoFingerSync',['require','exports','module','famous/core/EventHandler'],function(require, exports, module) {
+    var EventHandler = require('famous/core/EventHandler');
+
+    /**
+     * Helper to PinchSync, RotateSync, and ScaleSync.  Generalized handling of
+     *   two-finger touch events.
+     *   This class is meant to be overridden and not used directly.
+     *
+     * @class TwoFingerSync
+     * @constructor
+     */
+    function TwoFingerSync() {
+        this._eventInput = new EventHandler();
+        this._eventOutput = new EventHandler();
+
+        EventHandler.setInputHandler(this, this._eventInput);
+        EventHandler.setOutputHandler(this, this._eventOutput);
+
+        this.touchAEnabled = false;
+        this.touchAId = 0;
+        this.posA = null;
+        this.timestampA = 0;
+        this.touchBEnabled = false;
+        this.touchBId = 0;
+        this.posB = null;
+        this.timestampB = 0;
+
+        this._eventInput.on('touchstart', this.handleStart.bind(this));
+        this._eventInput.on('touchmove', this.handleMove.bind(this));
+        this._eventInput.on('touchend', this.handleEnd.bind(this));
+        this._eventInput.on('touchcancel', this.handleEnd.bind(this));
+    }
+
+    TwoFingerSync.calculateAngle = function(posA, posB) {
+        var diffX = posB[0] - posA[0];
+        var diffY = posB[1] - posA[1];
+        return Math.atan2(diffY, diffX);
+    };
+
+    TwoFingerSync.calculateDistance = function(posA, posB) {
+        var diffX = posB[0] - posA[0];
+        var diffY = posB[1] - posA[1];
+        return Math.sqrt(diffX * diffX + diffY * diffY);
+    };
+
+    TwoFingerSync.calculateCenter = function(posA, posB) {
+        return [(posA[0] + posB[0]) / 2.0, (posA[1] + posB[1]) / 2.0];
+    };
+
+    var _now = Date.now;
+
+    // private
+    TwoFingerSync.prototype.handleStart = function handleStart(event) {
+        for (var i = 0; i < event.changedTouches.length; i++) {
+            var touch = event.changedTouches[i];
+            if (!this.touchAEnabled) {
+                this.touchAId = touch.identifier;
+                this.touchAEnabled = true;
+                this.posA = [touch.pageX, touch.pageY];
+                this.timestampA = _now();
+            }
+            else if (!this.touchBEnabled) {
+                this.touchBId = touch.identifier;
+                this.touchBEnabled = true;
+                this.posB = [touch.pageX, touch.pageY];
+                this.timestampB = _now();
+                this._startUpdate(event);
+            }
+        }
+    };
+
+    // private
+    TwoFingerSync.prototype.handleMove = function handleMove(event) {
+        if (!(this.touchAEnabled && this.touchBEnabled)) return;
+        var prevTimeA = this.timestampA;
+        var prevTimeB = this.timestampB;
+        var diffTime;
+        for (var i = 0; i < event.changedTouches.length; i++) {
+            var touch = event.changedTouches[i];
+            if (touch.identifier === this.touchAId) {
+                this.posA = [touch.pageX, touch.pageY];
+                this.timestampA = _now();
+                diffTime = this.timestampA - prevTimeA;
+            }
+            else if (touch.identifier === this.touchBId) {
+                this.posB = [touch.pageX, touch.pageY];
+                this.timestampB = _now();
+                diffTime = this.timestampB - prevTimeB;
+            }
+        }
+        if (diffTime) this._moveUpdate(diffTime);
+    };
+
+    // private
+    TwoFingerSync.prototype.handleEnd = function handleEnd(event) {
+        for (var i = 0; i < event.changedTouches.length; i++) {
+            var touch = event.changedTouches[i];
+            if (touch.identifier === this.touchAId || touch.identifier === this.touchBId) {
+                if (this.touchAEnabled && this.touchBEnabled) {
+                    this._eventOutput.emit('end', {
+                        touches : [this.touchAId, this.touchBId],
+                        angle   : this._angle
+                    });
+                }
+                this.touchAEnabled = false;
+                this.touchAId = 0;
+                this.touchBEnabled = false;
+                this.touchBId = 0;
+            }
+        }
+    };
+
+    module.exports = TwoFingerSync;
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: mark@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+define('famous/inputs/PinchSync',['require','exports','module','./TwoFingerSync'],function(require, exports, module) {
+    var TwoFingerSync = require('./TwoFingerSync');
+
+    /**
+     * Handles piped in two-finger touch events to change position via pinching / expanding.
+     *   Emits 'start', 'update' and 'end' events with
+     *   position, velocity, touch ids, and distance between fingers.
+     *
+     * @class PinchSync
+     * @extends TwoFingerSync
+     * @constructor
+     * @param {Object} options default options overrides
+     * @param {Number} [options.scale] scale velocity by this factor
+     */
+    function PinchSync(options) {
+        TwoFingerSync.call(this);
+
+        this.options = Object.create(PinchSync.DEFAULT_OPTIONS);
+        if (options) this.setOptions(options);
+
+        this._displacement = 0;
+        this._previousDistance = 0;
+    }
+
+    PinchSync.prototype = Object.create(TwoFingerSync.prototype);
+    PinchSync.prototype.constructor = PinchSync;
+
+    PinchSync.DEFAULT_OPTIONS = {
+        scale : 1
+    };
+
+    PinchSync.prototype._startUpdate = function _startUpdate(event) {
+        this._previousDistance = TwoFingerSync.calculateDistance(this.posA, this.posB);
+        this._displacement = 0;
+
+        this._eventOutput.emit('start', {
+            count: event.touches.length,
+            touches: [this.touchAId, this.touchBId],
+            distance: this._dist,
+            center: TwoFingerSync.calculateCenter(this.posA, this.posB)
+        });
+    };
+
+    PinchSync.prototype._moveUpdate = function _moveUpdate(diffTime) {
+        var currDist = TwoFingerSync.calculateDistance(this.posA, this.posB);
+        var center = TwoFingerSync.calculateCenter(this.posA, this.posB);
+
+        var scale = this.options.scale;
+        var delta = scale * (currDist - this._previousDistance);
+        var velocity = delta / diffTime;
+
+        this._previousDistance = currDist;
+        this._displacement += delta;
+
+        this._eventOutput.emit('update', {
+            delta : delta,
+            velocity: velocity,
+            distance: currDist,
+            displacement: this._displacement,
+            center: center,
+            touches: [this.touchAId, this.touchBId]
+        });
+    };
+
+    /**
+     * Return entire options dictionary, including defaults.
+     *
+     * @method getOptions
+     * @return {Object} configuration options
+     */
+    PinchSync.prototype.getOptions = function getOptions() {
+        return this.options;
+    };
+
+    /**
+     * Set internal options, overriding any default options
+     *
+     * @method setOptions
+     *
+     * @param {Object} [options] overrides of default options
+     * @param {Number} [options.scale] scale velocity by this factor
+     */
+    PinchSync.prototype.setOptions = function setOptions(options) {
+        if (options.scale !== undefined) this.options.scale = options.scale;
+    };
+
+    module.exports = PinchSync;
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: mark@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+define('famous/inputs/RotateSync',['require','exports','module','./TwoFingerSync'],function(require, exports, module) {
+    var TwoFingerSync = require('./TwoFingerSync');
+
+    /**
+     * Handles piped in two-finger touch events to increase or decrease scale via pinching / expanding.
+     *   Emits 'start', 'update' and 'end' events an object with position, velocity, touch ids, and angle.
+     *   Useful for determining a rotation factor from initial two-finger touch.
+     *
+     * @class RotateSync
+     * @extends TwoFingerSync
+     * @constructor
+     * @param {Object} options default options overrides
+     * @param {Number} [options.scale] scale velocity by this factor
+     */
+    function RotateSync(options) {
+        TwoFingerSync.call(this);
+
+        this.options = Object.create(RotateSync.DEFAULT_OPTIONS);
+        if (options) this.setOptions(options);
+
+        this._angle = 0;
+        this._previousAngle = 0;
+    }
+
+    RotateSync.prototype = Object.create(TwoFingerSync.prototype);
+    RotateSync.prototype.constructor = RotateSync;
+
+    RotateSync.DEFAULT_OPTIONS = {
+        scale : 1
+    };
+
+    RotateSync.prototype._startUpdate = function _startUpdate(event) {
+        this._angle = 0;
+        this._previousAngle = TwoFingerSync.calculateAngle(this.posA, this.posB);
+        var center = TwoFingerSync.calculateCenter(this.posA, this.posB);
+        this._eventOutput.emit('start', {
+            count: event.touches.length,
+            angle: this._angle,
+            center: center,
+            touches: [this.touchAId, this.touchBId]
+        });
+    };
+
+    RotateSync.prototype._moveUpdate = function _moveUpdate(diffTime) {
+        var scale = this.options.scale;
+
+        var currAngle = TwoFingerSync.calculateAngle(this.posA, this.posB);
+        var center = TwoFingerSync.calculateCenter(this.posA, this.posB);
+
+        var diffTheta = scale * (currAngle - this._previousAngle);
+        var velTheta = diffTheta / diffTime;
+
+        this._angle += diffTheta;
+
+        this._eventOutput.emit('update', {
+            delta : diffTheta,
+            velocity: velTheta,
+            angle: this._angle,
+            center: center,
+            touches: [this.touchAId, this.touchBId]
+        });
+
+        this._previousAngle = currAngle;
+    };
+
+    /**
+     * Return entire options dictionary, including defaults.
+     *
+     * @method getOptions
+     * @return {Object} configuration options
+     */
+    RotateSync.prototype.getOptions = function getOptions() {
+        return this.options;
+    };
+
+    /**
+     * Set internal options, overriding any default options
+     *
+     * @method setOptions
+     *
+     * @param {Object} [options] overrides of default options
+     * @param {Number} [options.scale] scale velocity by this factor
+     */
+    RotateSync.prototype.setOptions = function setOptions(options) {
+        if (options.scale !== undefined) this.options.scale = options.scale;
+    };
+
+    module.exports = RotateSync;
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: mark@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+define('famous/inputs/ScaleSync',['require','exports','module','./TwoFingerSync'],function(require, exports, module) {
+    var TwoFingerSync = require('./TwoFingerSync');
+
+    /**
+     * Handles piped in two-finger touch events to increase or decrease scale via pinching / expanding.
+     *   Emits 'start', 'update' and 'end' events an object with position, velocity, touch ids, distance, and scale factor.
+     *   Useful for determining a scaling factor from initial two-finger touch.
+     *
+     * @class ScaleSync
+     * @extends TwoFingerSync
+     * @constructor
+     * @param {Object} options default options overrides
+     * @param {Number} [options.scale] scale velocity by this factor
+     */
+    function ScaleSync(options) {
+        TwoFingerSync.call(this);
+
+        this.options = Object.create(ScaleSync.DEFAULT_OPTIONS);
+        if (options) this.setOptions(options);
+
+        this._scaleFactor = 1;
+        this._startDist = 0;
+        this._eventInput.on('pipe', _reset.bind(this));
+    }
+
+    ScaleSync.prototype = Object.create(TwoFingerSync.prototype);
+    ScaleSync.prototype.constructor = ScaleSync;
+
+    ScaleSync.DEFAULT_OPTIONS = {
+        scale : 1
+    };
+
+    function _reset() {
+        this.touchAId = undefined;
+        this.touchBId = undefined;
+    }
+
+    // handles initial touch of two fingers
+    ScaleSync.prototype._startUpdate = function _startUpdate(event) {
+        this._scaleFactor = 1;
+        this._startDist = TwoFingerSync.calculateDistance(this.posA, this.posB);
+        this._eventOutput.emit('start', {
+            count: event.touches.length,
+            touches: [this.touchAId, this.touchBId],
+            distance: this._startDist,
+            center: TwoFingerSync.calculateCenter(this.posA, this.posB)
+        });
+    };
+
+    // handles movement of two fingers
+    ScaleSync.prototype._moveUpdate = function _moveUpdate(diffTime) {
+        var scale = this.options.scale;
+
+        var currDist = TwoFingerSync.calculateDistance(this.posA, this.posB);
+        var center = TwoFingerSync.calculateCenter(this.posA, this.posB);
+
+        var delta = (currDist - this._startDist) / this._startDist;
+        var newScaleFactor = Math.max(1 + scale * delta, 0);
+        var veloScale = (newScaleFactor - this._scaleFactor) / diffTime;
+
+        this._eventOutput.emit('update', {
+            delta : delta,
+            scale: newScaleFactor,
+            velocity: veloScale,
+            distance: currDist,
+            center : center,
+            touches: [this.touchAId, this.touchBId]
+        });
+
+        this._scaleFactor = newScaleFactor;
+    };
+
+    /**
+     * Return entire options dictionary, including defaults.
+     *
+     * @method getOptions
+     * @return {Object} configuration options
+     */
+    ScaleSync.prototype.getOptions = function getOptions() {
+        return this.options;
+    };
+
+    /**
+     * Set internal options, overriding any default options
+     *
+     * @method setOptions
+     *
+     * @param {Object} [options] overrides of default options
+     * @param {Number} [options.scale] scale velocity by this factor
+     */
+    ScaleSync.prototype.setOptions = function setOptions(options) {
+        if (options.scale !== undefined) this.options.scale = options.scale;
+    };
+
+    module.exports = ScaleSync;
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: mark@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+define('famous/inputs/ScrollSync',['require','exports','module','famous/core/EventHandler','famous/core/Engine'],function(require, exports, module) {
+    var EventHandler = require('famous/core/EventHandler');
+    var Engine = require('famous/core/Engine');
+
+    /**
+     * Handles piped in mousewheel events.
+     *   Emits 'start', 'update', and 'end' events with payloads including:
+     *   delta: change since last position,
+     *   position: accumulated deltas,
+     *   velocity: speed of change in pixels per ms,
+     *   slip: true (unused).
+     *
+     *   Can be used as delegate of GenericSync.
+     *
+     * @class ScrollSync
+     * @constructor
+     * @param {Object} [options] overrides of default options
+     * @param {Number} [options.direction] Pay attention to x changes (ScrollSync.DIRECTION_X),
+     *   y changes (ScrollSync.DIRECTION_Y) or both (undefined)
+     * @param {Number} [options.minimumEndSpeed] End speed calculation floors at this number, in pixels per ms
+     * @param {boolean} [options.rails] whether to snap position calculations to nearest axis
+     * @param {Number | Array.Number} [options.scale] scale outputs in by scalar or pair of scalars
+     * @param {Number} [options.stallTime] reset time for velocity calculation in ms
+     */
+    function ScrollSync(options) {
+        this.options = Object.create(ScrollSync.DEFAULT_OPTIONS);
+        if (options) this.setOptions(options);
+
+        this._payload = {
+            delta    : null,
+            position : null,
+            velocity : null,
+            slip     : true
+        };
+
+        this._eventInput = new EventHandler();
+        this._eventOutput = new EventHandler();
+
+        EventHandler.setInputHandler(this, this._eventInput);
+        EventHandler.setOutputHandler(this, this._eventOutput);
+
+        this._position = (this.options.direction === undefined) ? [0,0] : 0;
+        this._prevTime = undefined;
+        this._prevVel = undefined;
+        this._eventInput.on('mousewheel', _handleMove.bind(this));
+        this._eventInput.on('wheel', _handleMove.bind(this));
+        this._inProgress = false;
+        this._loopBound = false;
+    }
+
+    ScrollSync.DEFAULT_OPTIONS = {
+        direction: undefined,
+        minimumEndSpeed: Infinity,
+        rails: false,
+        scale: 1,
+        stallTime: 50,
+        lineHeight: 40
+    };
+
+    ScrollSync.DIRECTION_X = 0;
+    ScrollSync.DIRECTION_Y = 1;
+
+    var MINIMUM_TICK_TIME = 8;
+
+    var _now = Date.now;
+
+    function _newFrame() {
+        if (this._inProgress && (_now() - this._prevTime) > this.options.stallTime) {
+            this._inProgress = false;
+
+            var finalVel = (Math.abs(this._prevVel) >= this.options.minimumEndSpeed)
+                ? this._prevVel
+                : 0;
+
+            var payload = this._payload;
+            payload.position = this._position;
+            payload.velocity = finalVel;
+            payload.slip = true;
+
+            this._eventOutput.emit('end', payload);
+        }
+    }
+
+    function _handleMove(event) {
+        event.preventDefault();
+
+        if (!this._inProgress) {
+            this._inProgress = true;
+            this._position = (this.options.direction === undefined) ? [0,0] : 0;
+            payload = this._payload;
+            payload.slip = true;
+            payload.position = this._position;
+            payload.clientX = event.clientX;
+            payload.clientY = event.clientY;
+            payload.offsetX = event.offsetX;
+            payload.offsetY = event.offsetY;
+            this._eventOutput.emit('start', payload);
+            if (!this._loopBound) {
+                Engine.on('prerender', _newFrame.bind(this));
+                this._loopBound = true;
+            }
+        }
+
+        var currTime = _now();
+        var prevTime = this._prevTime || currTime;
+
+        var diffX = (event.wheelDeltaX !== undefined) ? event.wheelDeltaX : -event.deltaX;
+        var diffY = (event.wheelDeltaY !== undefined) ? event.wheelDeltaY : -event.deltaY;
+
+        if (event.deltaMode === 1) { // units in lines, not pixels
+            diffX *= this.options.lineHeight;
+            diffY *= this.options.lineHeight;
+        }
+
+        if (this.options.rails) {
+            if (Math.abs(diffX) > Math.abs(diffY)) diffY = 0;
+            else diffX = 0;
+        }
+
+        var diffTime = Math.max(currTime - prevTime, MINIMUM_TICK_TIME); // minimum tick time
+
+        var velX = diffX / diffTime;
+        var velY = diffY / diffTime;
+
+        var scale = this.options.scale;
+        var nextVel;
+        var nextDelta;
+
+        if (this.options.direction === ScrollSync.DIRECTION_X) {
+            nextDelta = scale * diffX;
+            nextVel = scale * velX;
+            this._position += nextDelta;
+        }
+        else if (this.options.direction === ScrollSync.DIRECTION_Y) {
+            nextDelta = scale * diffY;
+            nextVel = scale * velY;
+            this._position += nextDelta;
+        }
+        else {
+            nextDelta = [scale * diffX, scale * diffY];
+            nextVel = [scale * velX, scale * velY];
+            this._position[0] += nextDelta[0];
+            this._position[1] += nextDelta[1];
+        }
+
+        var payload = this._payload;
+        payload.delta    = nextDelta;
+        payload.velocity = nextVel;
+        payload.position = this._position;
+        payload.slip     = true;
+
+        this._eventOutput.emit('update', payload);
+
+        this._prevTime = currTime;
+        this._prevVel = nextVel;
+    }
+
+    /**
+     * Return entire options dictionary, including defaults.
+     *
+     * @method getOptions
+     * @return {Object} configuration options
+     */
+    ScrollSync.prototype.getOptions = function getOptions() {
+        return this.options;
+    };
+
+    /**
+     * Set internal options, overriding any default options
+     *
+     * @method setOptions
+     *
+     * @param {Object} [options] overrides of default options
+     * @param {Number} [options.minimimEndSpeed] If final velocity smaller than this, round down to 0.
+     * @param {Number} [options.stallTime] ms of non-motion before 'end' emitted
+     * @param {Number} [options.rails] whether to constrain to nearest axis.
+     * @param {Number} [options.direction] ScrollSync.DIRECTION_X, DIRECTION_Y -
+     *    pay attention to one specific direction.
+     * @param {Number} [options.scale] constant factor to scale velocity output
+     */
+    ScrollSync.prototype.setOptions = function setOptions(options) {
+        if (options.direction !== undefined) this.options.direction = options.direction;
+        if (options.minimumEndSpeed !== undefined) this.options.minimumEndSpeed = options.minimumEndSpeed;
+        if (options.rails !== undefined) this.options.rails = options.rails;
+        if (options.scale !== undefined) this.options.scale = options.scale;
+        if (options.stallTime !== undefined) this.options.stallTime = options.stallTime;
+    };
+
+    module.exports = ScrollSync;
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: mark@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
 define('famous/inputs/TouchTracker',['require','exports','module','famous/core/EventHandler'],function(require, exports, module) {
     var EventHandler = require('famous/core/EventHandler');
 
@@ -5671,727 +6598,6 @@ define('famous/inputs/TouchSync',['require','exports','module','./TouchTracker',
     };
 
     module.exports = TouchSync;
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: david@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/modifiers/Draggable',['require','exports','module','famous/core/Transform','famous/transitions/Transitionable','famous/core/EventHandler','famous/math/Utilities','famous/inputs/GenericSync','famous/inputs/MouseSync','famous/inputs/TouchSync'],function(require, exports, module) {
-    var Transform = require('famous/core/Transform');
-    var Transitionable = require('famous/transitions/Transitionable');
-    var EventHandler = require('famous/core/EventHandler');
-    var Utilities = require('famous/math/Utilities');
-
-    var GenericSync = require('famous/inputs/GenericSync');
-    var MouseSync = require('famous/inputs/MouseSync');
-    var TouchSync = require('famous/inputs/TouchSync');
-    GenericSync.register({'mouse': MouseSync, 'touch': TouchSync});
-
-    /**
-     * Makes added render nodes responsive to drag beahvior.
-     *   Emits events 'start', 'update', 'end'.
-     * @class Draggable
-     * @constructor
-     * @param {Object} [options] options configuration object.
-     * @param {Number} [options.snapX] grid width for snapping during drag
-     * @param {Number} [options.snapY] grid height for snapping during drag
-     * @param {Array.Number} [options.xRange] maxmimum [negative, positive] x displacement from start of drag
-     * @param {Array.Number} [options.yRange] maxmimum [negative, positive] y displacement from start of drag
-     * @param {Number} [options.scale] one pixel of input motion translates to this many pixels of output drag motion
-     * @param {Number} [options.projection] User should set to Draggable._direction.x or
-     *    Draggable._direction.y to constrain to one axis.
-     *
-     */
-    function Draggable(options) {
-        this.options = Object.create(Draggable.DEFAULT_OPTIONS);
-        if (options) this.setOptions(options);
-
-        this._positionState = new Transitionable([0,0]);
-        this._differential  = [0,0];
-        this._active = true;
-
-        this.sync = new GenericSync(['mouse', 'touch'], {scale : this.options.scale});
-        this.eventOutput = new EventHandler();
-        EventHandler.setInputHandler(this,  this.sync);
-        EventHandler.setOutputHandler(this, this.eventOutput);
-
-        _bindEvents.call(this);
-    }
-
-    //binary representation of directions for bitwise operations
-    var _direction = {
-        x : 0x01,         //001
-        y : 0x02          //010
-    };
-
-    Draggable.DIRECTION_X = _direction.x;
-    Draggable.DIRECTION_Y = _direction.y;
-
-    var _clamp = Utilities.clamp;
-
-    Draggable.DEFAULT_OPTIONS = {
-        projection  : _direction.x | _direction.y,
-        scale       : 1,
-        xRange      : null,
-        yRange      : null,
-        snapX       : 0,
-        snapY       : 0,
-        transition  : {duration : 0}
-    };
-
-    function _mapDifferential(differential) {
-        var opts        = this.options;
-        var projection  = opts.projection;
-        var snapX       = opts.snapX;
-        var snapY       = opts.snapY;
-
-        //axes
-        var tx = (projection & _direction.x) ? differential[0] : 0;
-        var ty = (projection & _direction.y) ? differential[1] : 0;
-
-        //snapping
-        if (snapX > 0) tx -= tx % snapX;
-        if (snapY > 0) ty -= ty % snapY;
-
-        return [tx, ty];
-    }
-
-    function _handleStart() {
-        if (!this._active) return;
-        if (this._positionState.isActive()) this._positionState.halt();
-        this.eventOutput.emit('start', {position : this.getPosition()});
-    }
-
-    function _handleMove(event) {
-        if (!this._active) return;
-
-        var options = this.options;
-        this._differential = event.position;
-        var newDifferential = _mapDifferential.call(this, this._differential);
-
-        //buffer the differential if snapping is set
-        this._differential[0] -= newDifferential[0];
-        this._differential[1] -= newDifferential[1];
-
-        var pos = this.getPosition();
-
-        //modify position, retain reference
-        pos[0] += newDifferential[0];
-        pos[1] += newDifferential[1];
-
-        //handle bounding box
-        if (options.xRange){
-            var xRange = [options.xRange[0] + 0.5 * options.snapX, options.xRange[1] - 0.5 * options.snapX];
-            pos[0] = _clamp(pos[0], xRange);
-        }
-
-        if (options.yRange){
-            var yRange = [options.yRange[0] + 0.5 * options.snapY, options.yRange[1] - 0.5 * options.snapY];
-            pos[1] = _clamp(pos[1], yRange);
-        }
-
-        this.eventOutput.emit('update', {position : pos});
-    }
-
-    function _handleEnd() {
-        if (!this._active) return;
-        this.eventOutput.emit('end', {position : this.getPosition()});
-    }
-
-    function _bindEvents() {
-        this.sync.on('start', _handleStart.bind(this));
-        this.sync.on('update', _handleMove.bind(this));
-        this.sync.on('end', _handleEnd.bind(this));
-    }
-
-    /**
-     * Set internal options, overriding any default options
-     *
-     * @method setOptions
-     *
-     * @param {Object} [options] overrides of default options.  See constructor.
-     */
-    Draggable.prototype.setOptions = function setOptions(options) {
-        var currentOptions = this.options;
-        if (options.projection !== undefined) {
-            var proj = options.projection;
-            this.options.projection = 0;
-            ['x', 'y'].forEach(function(val) {
-                if (proj.indexOf(val) !== -1) currentOptions.projection |= _direction[val];
-            });
-        }
-        if (options.scale  !== undefined) {
-            currentOptions.scale  = options.scale;
-            this.sync.setOptions({
-                scale: options.scale
-            });
-        }
-        if (options.xRange !== undefined) currentOptions.xRange = options.xRange;
-        if (options.yRange !== undefined) currentOptions.yRange = options.yRange;
-        if (options.snapX  !== undefined) currentOptions.snapX  = options.snapX;
-        if (options.snapY  !== undefined) currentOptions.snapY  = options.snapY;
-    };
-
-    /**
-     * Get current delta in position from where this draggable started.
-     *
-     * @method getPosition
-     *
-     * @return {array<number>} [x, y] position delta from start.
-     */
-    Draggable.prototype.getPosition = function getPosition() {
-        return this._positionState.get();
-    };
-
-    /**
-     * Transition the element to the desired relative position via provided transition.
-     *  For example, calling this with [0,0] will not change the position.
-     *  Callback will be executed on completion.
-     *
-     * @method setRelativePosition
-     *
-     * @param {array<number>} position end state to which we interpolate
-     * @param {transition} transition transition object specifying how object moves to new position
-     * @param {function} callback zero-argument function to call on observed completion
-     */
-    Draggable.prototype.setRelativePosition = function setRelativePosition(position, transition, callback) {
-        var currPos = this.getPosition();
-        var relativePosition = [currPos[0] + position[0], currPos[1] + position[1]];
-        this.setPosition(relativePosition, transition, callback);
-    };
-
-    /**
-     * Transition the element to the desired absolute position via provided transition.
-     *  Callback will be executed on completion.
-     *
-     * @method setPosition
-     *
-     * @param {array<number>} position end state to which we interpolate
-     * @param {transition} transition transition object specifying how object moves to new position
-     * @param {function} callback zero-argument function to call on observed completion
-     */
-    Draggable.prototype.setPosition = function setPosition(position, transition, callback) {
-        if (this._positionState.isActive()) this._positionState.halt();
-        this._positionState.set(position, transition, callback);
-    };
-
-    /**
-     * Set this draggable to respond to user input.
-     *
-     * @method activate
-     *
-     */
-    Draggable.prototype.activate = function activate() {
-        this._active = true;
-    };
-
-    /**
-     * Set this draggable to ignore user input.
-     *
-     * @method deactivate
-     *
-     */
-    Draggable.prototype.deactivate = function deactivate() {
-        this._active = false;
-    };
-
-    /**
-     * Switch the input response stage between active and inactive.
-     *
-     * @method toggle
-     *
-     */
-    Draggable.prototype.toggle = function toggle() {
-        this._active = !this._active;
-    };
-
-    /**
-     * Return render spec for this Modifier, applying to the provided
-     *    target component.  This is similar to render() for Surfaces.
-     *
-     * @private
-     * @method modify
-     *
-     * @param {Object} target (already rendered) render spec to
-     *    which to apply the transform.
-     * @return {Object} render spec for this Modifier, including the
-     *    provided target
-     */
-    Draggable.prototype.modify = function modify(target) {
-        var pos = this.getPosition();
-        return {
-            transform: Transform.translate(pos[0], pos[1]),
-            target: target
-        };
-    };
-
-    module.exports = Draggable;
-
-
-define('famous/modifiers/Fader',['require','exports','module','famous/transitions/Transitionable','famous/core/OptionsManager'],function(require, exports, module) {
-    var Transitionable = require('famous/transitions/Transitionable');
-    var OptionsManager = require('famous/core/OptionsManager');
-
-    /**
-     * Modifier that allows you to fade the opacity of affected renderables in and out.
-     * @class Fader
-     * @constructor
-     * @param {Object} [options] options configuration object.
-     * @param {Boolean} [options.cull=false] Stops returning affected renderables up the tree when they're fully faded when true.
-     * @param {Transition} [options.transition=true] The main transition for showing and hiding.
-     * @param {Transition} [options.pulseInTransition=true] Controls the transition to a pulsed state when the Fader instance's pulse
-     * method is called.
-     * @param {Transition} [options.pulseOutTransition=true]Controls the transition back from a pulsed state when the Fader instance's pulse
-     * method is called.
-     *
-     */
-    function Fader(options, startState) {
-        this.options = Object.create(Fader.DEFAULT_OPTIONS);
-        this._optionsManager = new OptionsManager(this.options);
-
-        if (options) this.setOptions(options);
-
-        if (!startState) startState = 0;
-        this.transitionHelper = new Transitionable(startState);
-    }
-
-    Fader.DEFAULT_OPTIONS = {
-        cull: false,
-        transition: true,
-        pulseInTransition: true,
-        pulseOutTransition: true
-    };
-
-    /**
-     * Set internal options, overriding any default options
-     *
-     * @method setOptions
-     *
-     * @param {Object} [options] overrides of default options.  See constructor.
-     */
-    Fader.prototype.setOptions = function setOptions(options) {
-        return this._optionsManager.setOptions(options);
-    };
-
-    /**
-     * Fully displays the Fader instance's associated renderables.
-     *
-     * @method show
-     * @param {Transition} [transition] The transition that coordinates setting to the new state.
-     * @param {Function} [callback] A callback that executes once you've transitioned to the fully shown state.
-     */
-    Fader.prototype.show = function show(transition, callback) {
-        transition = transition || this.options.transition;
-        this.set(1, transition, callback);
-    };
-
-    /**
-     * Fully fades the Fader instance's associated renderables.
-     *
-     * @method hide
-     * @param {Transition} [transition] The transition that coordinates setting to the new state.
-     * @param {Function} [callback] A callback that executes once you've transitioned to the fully faded state.
-     */
-    Fader.prototype.hide = function hide(transition, callback) {
-        transition = transition || this.options.transition;
-        this.set(0, transition, callback);
-    };
-
-    /**
-     * Manually sets the opacity state of the fader to the passed-in one. Executes with an optional
-     * transition and callback.
-     *
-     * @method set
-     * @param {Number} state A number from zero to one: the amount of opacity you want to set to.
-     * @param {Transition} [transition] The transition that coordinates setting to the new state.
-     * @param {Function} [callback] A callback that executes once you've finished executing the pulse.
-     */
-    Fader.prototype.set = function set(state, transition, callback) {
-        this.halt();
-        this.transitionHelper.set(state, transition, callback);
-    };
-
-    /**
-     * Halt the transition
-     *
-     * @method halt
-     */
-    Fader.prototype.halt = function halt() {
-        this.transitionHelper.halt();
-    };
-
-    /**
-     * Tells you if your Fader instance is above its visibility threshold.
-     *
-     * @method isVisible
-     * @return {Boolean} Whether or not your Fader instance is visible.
-     */
-    Fader.prototype.isVisible = function isVisible() {
-        return (this.transitionHelper.get() > 0);
-    };
-
-    /**
-     * Return render spec for this Modifier, applying to the provided
-     *    target component.  This is similar to render() for Surfaces.
-     *
-     * @private
-     * @method modify
-     *
-     * @param {Object} target (already rendered) render spec to
-     *    which to apply the transform.
-     * @return {Object} render spec for this Modifier, including the
-     *    provided target
-     */
-    Fader.prototype.modify = function modify(target) {
-        var currOpacity = this.transitionHelper.get();
-        if (this.options.cull && !currOpacity) return undefined;
-        else return {opacity: currOpacity, target: target};
-    };
-
-    module.exports = Fader;
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: david@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/modifiers/ModifierChain',['require','exports','module'],function(require, exports, module) {
-
-    /**
-     * A class to add and remove a chain of modifiers
-     *   at a single point in the render tree
-     *
-     * @class ModifierChain
-     * @constructor
-     */
-    function ModifierChain() {
-        this._chain = [];
-        if (arguments.length) this.addModifier.apply(this, arguments);
-    }
-
-    /**
-     * Add a modifier, or comma separated modifiers, to the modifier chain.
-     *
-     * @method addModifier
-     *
-     * @param {...Modifier*} varargs args list of Modifiers
-     */
-    ModifierChain.prototype.addModifier = function addModifier(varargs) {
-        Array.prototype.push.apply(this._chain, arguments);
-    };
-
-    /**
-     * Remove a modifier from the modifier chain.
-     *
-     * @method removeModifier
-     *
-     * @param {Modifier} modifier
-     */
-    ModifierChain.prototype.removeModifier = function removeModifier(modifier) {
-        var index = this._chain.indexOf(modifier);
-        if (index < 0) return;
-        this._chain.splice(index, 1);
-    };
-
-    /**
-     * Return render spec for this Modifier, applying to the provided
-     *    target component.  This is similar to render() for Surfaces.
-     *
-     * @private
-     * @method modify
-     *
-     * @param {Object} input (already rendered) render spec to
-     *    which to apply the transform.
-     * @return {Object} render spec for this Modifier, including the
-     *    provided target
-     */
-    ModifierChain.prototype.modify = function modify(input) {
-        var chain  = this._chain;
-        var result = input;
-        for (var i = 0; i < chain.length; i++) {
-            result = chain[i].modify(result);
-        }
-        return result;
-    };
-
-    module.exports = ModifierChain;
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: mark@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/modifiers/StateModifier',['require','exports','module','famous/core/Modifier','famous/core/Transform','famous/transitions/Transitionable','famous/transitions/TransitionableTransform'],function(require, exports, module) {
-    var Modifier = require('famous/core/Modifier');
-    var Transform = require('famous/core/Transform');
-    var Transitionable = require('famous/transitions/Transitionable');
-    var TransitionableTransform = require('famous/transitions/TransitionableTransform');
-
-    /**
-     *  A collection of visual changes to be
-     *    applied to another renderable component, strongly coupled with the state that defines
-     *    those changes. This collection includes a
-     *    transform matrix, an opacity constant, a size, an origin specifier, and an alignment specifier.
-     *    StateModifier objects can be added to any RenderNode or object
-     *    capable of displaying renderables.  The StateModifier's children and descendants
-     *    are transformed by the amounts specified in the modifier's properties.
-     *
-     * @class StateModifier
-     * @constructor
-     * @param {Object} [options] overrides of default options
-     * @param {Transform} [options.transform] affine transformation matrix
-     * @param {Number} [options.opacity]
-     * @param {Array.Number} [options.origin] origin adjustment
-     * @param {Array.Number} [options.align] align adjustment
-     * @param {Array.Number} [options.size] size to apply to descendants
-     */
-    function StateModifier(options) {
-        this._transformState = new TransitionableTransform(Transform.identity);
-        this._opacityState = new Transitionable(1);
-        this._originState = new Transitionable([0, 0]);
-        this._alignState = new Transitionable([0, 0]);
-        this._sizeState = new Transitionable([0, 0]);
-
-        this._modifier = new Modifier({
-            transform: this._transformState,
-            opacity: this._opacityState,
-            origin: null,
-            align: null,
-            size: null
-        });
-
-        this._hasOrigin = false;
-        this._hasAlign = false;
-        this._hasSize = false;
-
-        if (options) {
-            if (options.transform) this.setTransform(options.transform);
-            if (options.opacity !== undefined) this.setOpacity(options.opacity);
-            if (options.origin) this.setOrigin(options.origin);
-            if (options.align) this.setAlign(options.align);
-            if (options.size) this.setSize(options.size);
-        }
-    }
-
-    /**
-     * Set the transform matrix of this modifier, either statically or
-     *   through a provided Transitionable.
-     *
-     * @method setTransform
-     *
-     * @param {Transform} transform Transform to transition to.
-     * @param {Transitionable} [transition] Valid transitionable object
-     * @param {Function} [callback] callback to call after transition completes
-     * @return {StateModifier} this
-     */
-    StateModifier.prototype.setTransform = function setTransform(transform, transition, callback) {
-        this._transformState.set(transform, transition, callback);
-        return this;
-    };
-
-    /**
-     * Set the opacity of this modifier, either statically or
-     *   through a provided Transitionable.
-     *
-     * @method setOpacity
-     *
-     * @param {Number} opacity Opacity value to transition to.
-     * @param {Transitionable} transition Valid transitionable object
-     * @param {Function} callback callback to call after transition completes
-     * @return {StateModifier} this
-     */
-    StateModifier.prototype.setOpacity = function setOpacity(opacity, transition, callback) {
-        this._opacityState.set(opacity, transition, callback);
-        return this;
-    };
-
-    /**
-     * Set the origin of this modifier, either statically or
-     *   through a provided Transitionable.
-     *
-     * @method setOrigin
-     *
-     * @param {Array.Number} origin two element array with values between 0 and 1.
-     * @param {Transitionable} transition Valid transitionable object
-     * @param {Function} callback callback to call after transition completes
-     * @return {StateModifier} this
-     */
-    StateModifier.prototype.setOrigin = function setOrigin(origin, transition, callback) {
-        if (origin === null) {
-            if (this._hasOrigin) {
-                this._modifier.originFrom(null);
-                this._hasOrigin = false;
-            }
-            return this;
-        }
-        else if (!this._hasOrigin) {
-            this._hasOrigin = true;
-            this._modifier.originFrom(this._originState);
-        }
-        this._originState.set(origin, transition, callback);
-        return this;
-    };
-
-    /**
-     * Set the alignment of this modifier, either statically or
-     *   through a provided Transitionable.
-     *
-     * @method setAlign
-     *
-     * @param {Array.Number} align two element array with values between 0 and 1.
-     * @param {Transitionable} transition Valid transitionable object
-     * @param {Function} callback callback to call after transition completes
-     * @return {StateModifier} this
-     */
-    StateModifier.prototype.setAlign = function setOrigin(align, transition, callback) {
-        if (align === null) {
-            if (this._hasAlign) {
-                this._modifier.alignFrom(null);
-                this._hasAlign = false;
-            }
-            return this;
-        }
-        else if (!this._hasAlign) {
-            this._hasAlign = true;
-            this._modifier.alignFrom(this._alignState);
-        }
-        this._alignState.set(align, transition, callback);
-        return this;
-    };
-
-    /**
-     * Set the size of this modifier, either statically or
-     *   through a provided Transitionable.
-     *
-     * @method setSize
-     *
-     * @param {Array.Number} size two element array with values between 0 and 1.
-     * @param {Transitionable} transition Valid transitionable object
-     * @param {Function} callback callback to call after transition completes
-     * @return {StateModifier} this
-     */
-    StateModifier.prototype.setSize = function setSize(size, transition, callback) {
-        if (size === null) {
-            if (this._hasSize) {
-                this._modifier.sizeFrom(null);
-                this._hasSize = false;
-            }
-            return this;
-        }
-        else if (!this._hasSize) {
-            this._hasSize = true;
-            this._modifier.sizeFrom(this._sizeState);
-        }
-        this._sizeState.set(size, transition, callback);
-        return this;
-    };
-
-    /**
-     * Stop the transition.
-     *
-     * @method halt
-     */
-    StateModifier.prototype.halt = function halt() {
-        this._transformState.halt();
-        this._opacityState.halt();
-        this._originState.halt();
-        this._alignState.halt();
-        this._sizeState.halt();
-    };
-
-    /**
-     * Get the current state of the transform matrix component.
-     *
-     * @method getTransform
-     * @return {Object} transform provider object
-     */
-    StateModifier.prototype.getTransform = function getTransform() {
-        return this._transformState.get();
-    };
-
-    /**
-     * Get the destination state of the transform component.
-     *
-     * @method getFinalTransform
-     * @return {Transform} transform matrix
-     */
-    StateModifier.prototype.getFinalTransform = function getFinalTransform() {
-        return this._transformState.getFinal();
-    };
-
-    /**
-     * Get the current state of the opacity component.
-     *
-     * @method getOpacity
-     * @return {Object} opacity provider object
-     */
-    StateModifier.prototype.getOpacity = function getOpacity() {
-        return this._opacityState.get();
-    };
-
-    /**
-     * Get the current state of the origin component.
-     *
-     * @method getOrigin
-     * @return {Object} origin provider object
-     */
-    StateModifier.prototype.getOrigin = function getOrigin() {
-        return this._hasOrigin ? this._originState.get() : null;
-    };
-
-    /**
-     * Get the current state of the align component.
-     *
-     * @method getAlign
-     * @return {Object} align provider object
-     */
-    StateModifier.prototype.getAlign = function getAlign() {
-        return this._hasAlign ? this._alignState.get() : null;
-    };
-
-    /**
-     * Get the current state of the size component.
-     *
-     * @method getSize
-     * @return {Object} size provider object
-     */
-    StateModifier.prototype.getSize = function getSize() {
-        return this._hasSize ? this._sizeState.get() : null;
-    };
-
-    /**
-     * Return render spec for this StateModifier, applying to the provided
-     *    target component.  This is similar to render() for Surfaces.
-     *
-     * @private
-     * @method modify
-     *
-     * @param {Object} target (already rendered) render spec to
-     *    which to apply the transform.
-     * @return {Object} render spec for this StateModifier, including the
-     *    provided target
-     */
-    StateModifier.prototype.modify = function modify(target) {
-        return this._modifier.modify(target);
-    };
-
-    module.exports = StateModifier;
 
 
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -6704,7 +6910,8 @@ define('famous/math/Vector',['require','exports','module'],function(require, exp
      */
 
     Vector.prototype.put = function put(v) {
-        _setFromVector.call(v, _register);
+        if (this === _register) _setFromVector.call(v, _register);
+        else _setFromVector.call(v, this);
     };
 
     /**
@@ -7469,85 +7676,48 @@ define('famous/math/Random',['require','exports','module'],function(require, exp
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
- * Owner: david@famo.us
+ * Owner: mark@famo.us
  * @license MPL 2.0
  * @copyright Famous Industries, Inc. 2014
  */
 
-define('famous/events/EventArbiter',['require','exports','module','famous/core/EventHandler'],function(require, exports, module) {
-    var EventHandler = require('famous/core/EventHandler');
+define('famous/math/Utilities',['require','exports','module'],function(require, exports, module) {
+    /**
+     * A few static methods.
+     *
+     * @class Utilities
+     * @static
+     */
+    var Utilities = {};
 
     /**
-     * A switch which wraps several event destinations and
-     *  redirects received events to at most one of them.
-     *  Setting the 'mode' of the object dictates which one
-     *  of these destinations will receive events.
+     * Constrain input to range.
      *
-     * @class EventArbiter
-     * @constructor
-     *
-     * @param {Number | string} startMode initial setting of switch,
+     * @method clamp
+     * @param {Number} value input
+     * @param {Array.Number} range [min, max]
+     * @static
      */
-    function EventArbiter(startMode) {
-        this.dispatchers = {};
-        this.currMode = undefined;
-        this.setMode(startMode);
-    }
+    Utilities.clamp = function clamp(value, range) {
+        return Math.max(Math.min(value, range[1]), range[0]);
+    };
 
     /**
-     * Set switch to this mode, passing events to the corresponding
-     *   EventHandler.  If mode has changed, emits 'change' event,
-     *   emits 'unpipe' event to the old mode's handler, and emits 'pipe'
-     *   event to the new mode's handler.
+     * Euclidean length of numerical array.
      *
-     * @method setMode
-     *
-     * @param {string | number} mode indicating which event handler to send to.
+     * @method length
+     * @param {Array.Number} array array of numbers
+     * @static
      */
-    EventArbiter.prototype.setMode = function setMode(mode) {
-        if (mode !== this.currMode) {
-            var startMode = this.currMode;
-
-            if (this.dispatchers[this.currMode]) this.dispatchers[this.currMode].trigger('unpipe');
-            this.currMode = mode;
-            if (this.dispatchers[mode]) this.dispatchers[mode].emit('pipe');
-            this.emit('change', {from: startMode, to: mode});
+    Utilities.length = function length(array) {
+        var distanceSquared = 0;
+        for (var i = 0; i < array.length; i++) {
+            distanceSquared += array[i] * array[i];
         }
+        return Math.sqrt(distanceSquared);
     };
 
-    /**
-     * Return the existing EventHandler corresponding to this
-     *   mode, creating one if it doesn't exist.
-     *
-     * @method forMode
-     *
-     * @param {string | number} mode mode to which this eventHandler corresponds
-     *
-     * @return {EventHandler} eventHandler corresponding to this mode
-     */
-    EventArbiter.prototype.forMode = function forMode(mode) {
-        if (!this.dispatchers[mode]) this.dispatchers[mode] = new EventHandler();
-        return this.dispatchers[mode];
-    };
-
-    /**
-     * Trigger an event, sending to currently selected handler, if
-     *   it is listening for provided 'type' key.
-     *
-     * @method emit
-     *
-     * @param {string} eventType event type key (for example, 'click')
-     * @param {Object} event event data
-     * @return {EventHandler} this
-     */
-    EventArbiter.prototype.emit = function emit(eventType, event) {
-        if (this.currMode === undefined) return false;
-        if (!event) event = {};
-        var dispatcher = this.dispatchers[this.currMode];
-        if (dispatcher) return dispatcher.trigger(eventType, event);
-    };
-
-    module.exports = EventArbiter;
+    module.exports = Utilities;
 
 
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -7559,53 +7729,379 @@ define('famous/events/EventArbiter',['require','exports','module','famous/core/E
  * @copyright Famous Industries, Inc. 2014
  */
 
-define('famous/events/EventFilter',['require','exports','module','famous/core/EventHandler'],function(require, exports, module) {
+define('famous/modifiers/Draggable',['require','exports','module','famous/core/Transform','famous/transitions/Transitionable','famous/core/EventHandler','famous/math/Utilities','famous/inputs/GenericSync','famous/inputs/MouseSync','famous/inputs/TouchSync'],function(require, exports, module) {
+    var Transform = require('famous/core/Transform');
+    var Transitionable = require('famous/transitions/Transitionable');
     var EventHandler = require('famous/core/EventHandler');
+    var Utilities = require('famous/math/Utilities');
+
+    var GenericSync = require('famous/inputs/GenericSync');
+    var MouseSync = require('famous/inputs/MouseSync');
+    var TouchSync = require('famous/inputs/TouchSync');
+    GenericSync.register({'mouse': MouseSync, 'touch': TouchSync});
 
     /**
-     * EventFilter regulates the broadcasting of events based on
-     *  a specified condition function of standard event type: function(type, data).
-     *
-     * @class EventFilter
+     * Makes added render nodes responsive to drag beahvior.
+     *   Emits events 'start', 'update', 'end'.
+     * @class Draggable
      * @constructor
+     * @param {Object} [options] options configuration object.
+     * @param {Number} [options.snapX] grid width for snapping during drag
+     * @param {Number} [options.snapY] grid height for snapping during drag
+     * @param {Array.Number} [options.xRange] maxmimum [negative, positive] x displacement from start of drag
+     * @param {Array.Number} [options.yRange] maxmimum [negative, positive] y displacement from start of drag
+     * @param {Number} [options.scale] one pixel of input motion translates to this many pixels of output drag motion
+     * @param {Number} [options.projection] User should set to Draggable._direction.x or
+     *    Draggable._direction.y to constrain to one axis.
      *
-     * @param {function} condition function to determine whether or not
-     *    events are emitted.
      */
-    function EventFilter(condition) {
-        EventHandler.call(this);
-        this._condition = condition;
+    function Draggable(options) {
+        this.options = Object.create(Draggable.DEFAULT_OPTIONS);
+        if (options) this.setOptions(options);
+
+        this._positionState = new Transitionable([0,0]);
+        this._differential  = [0,0];
+        this._active = true;
+
+        this.sync = new GenericSync(['mouse', 'touch'], {scale : this.options.scale});
+        this.eventOutput = new EventHandler();
+        EventHandler.setInputHandler(this,  this.sync);
+        EventHandler.setOutputHandler(this, this.eventOutput);
+
+        _bindEvents.call(this);
     }
-    EventFilter.prototype = Object.create(EventHandler.prototype);
-    EventFilter.prototype.constructor = EventFilter;
+
+    //binary representation of directions for bitwise operations
+    var _direction = {
+        x : 0x01,         //001
+        y : 0x02          //010
+    };
+
+    Draggable.DIRECTION_X = _direction.x;
+    Draggable.DIRECTION_Y = _direction.y;
+
+    var _clamp = Utilities.clamp;
+
+    Draggable.DEFAULT_OPTIONS = {
+        projection  : _direction.x | _direction.y,
+        scale       : 1,
+        xRange      : null,
+        yRange      : null,
+        snapX       : 0,
+        snapY       : 0,
+        transition  : {duration : 0}
+    };
+
+    function _mapDifferential(differential) {
+        var opts        = this.options;
+        var projection  = opts.projection;
+        var snapX       = opts.snapX;
+        var snapY       = opts.snapY;
+
+        //axes
+        var tx = (projection & _direction.x) ? differential[0] : 0;
+        var ty = (projection & _direction.y) ? differential[1] : 0;
+
+        //snapping
+        if (snapX > 0) tx -= tx % snapX;
+        if (snapY > 0) ty -= ty % snapY;
+
+        return [tx, ty];
+    }
+
+    function _handleStart() {
+        if (!this._active) return;
+        if (this._positionState.isActive()) this._positionState.halt();
+        this.eventOutput.emit('start', {position : this.getPosition()});
+    }
+
+    function _handleMove(event) {
+        if (!this._active) return;
+
+        var options = this.options;
+        this._differential = event.position;
+        var newDifferential = _mapDifferential.call(this, this._differential);
+
+        //buffer the differential if snapping is set
+        this._differential[0] -= newDifferential[0];
+        this._differential[1] -= newDifferential[1];
+
+        var pos = this.getPosition();
+
+        //modify position, retain reference
+        pos[0] += newDifferential[0];
+        pos[1] += newDifferential[1];
+
+        //handle bounding box
+        if (options.xRange){
+            var xRange = [options.xRange[0] + 0.5 * options.snapX, options.xRange[1] - 0.5 * options.snapX];
+            pos[0] = _clamp(pos[0], xRange);
+        }
+
+        if (options.yRange){
+            var yRange = [options.yRange[0] + 0.5 * options.snapY, options.yRange[1] - 0.5 * options.snapY];
+            pos[1] = _clamp(pos[1], yRange);
+        }
+
+        this.eventOutput.emit('update', {position : pos});
+    }
+
+    function _handleEnd() {
+        if (!this._active) return;
+        this.eventOutput.emit('end', {position : this.getPosition()});
+    }
+
+    function _bindEvents() {
+        this.sync.on('start', _handleStart.bind(this));
+        this.sync.on('update', _handleMove.bind(this));
+        this.sync.on('end', _handleEnd.bind(this));
+    }
 
     /**
-     * If filter condition is met, trigger an event, sending to all downstream handlers
-     *   listening for provided 'type' key.
+     * Set internal options, overriding any default options
      *
-     * @method emit
+     * @method setOptions
      *
-     * @param {string} type event type key (for example, 'click')
-     * @param {Object} data event data
-     * @return {EventHandler} this
+     * @param {Object} [options] overrides of default options.  See constructor.
      */
-    EventFilter.prototype.emit = function emit(type, data) {
-        if (this._condition(type, data))
-            return EventHandler.prototype.emit.apply(this, arguments);
+    Draggable.prototype.setOptions = function setOptions(options) {
+        var currentOptions = this.options;
+        if (options.projection !== undefined) {
+            var proj = options.projection;
+            this.options.projection = 0;
+            ['x', 'y'].forEach(function(val) {
+                if (proj.indexOf(val) !== -1) currentOptions.projection |= _direction[val];
+            });
+        }
+        if (options.scale  !== undefined) {
+            currentOptions.scale  = options.scale;
+            this.sync.setOptions({
+                scale: options.scale
+            });
+        }
+        if (options.xRange !== undefined) currentOptions.xRange = options.xRange;
+        if (options.yRange !== undefined) currentOptions.yRange = options.yRange;
+        if (options.snapX  !== undefined) currentOptions.snapX  = options.snapX;
+        if (options.snapY  !== undefined) currentOptions.snapY  = options.snapY;
     };
 
     /**
-     * An alias of emit. Trigger determines whether to send
-     *  events based on the return value of it's condition function
-     *  when passed the event type and associated data.
+     * Get current delta in position from where this draggable started.
      *
-     * @method trigger
-     * @param {string} type name of the event
-     * @param {object} data associated data
+     * @method getPosition
+     *
+     * @return {array<number>} [x, y] position delta from start.
      */
-    EventFilter.prototype.trigger = EventFilter.prototype.emit;
+    Draggable.prototype.getPosition = function getPosition() {
+        return this._positionState.get();
+    };
 
-    module.exports = EventFilter;
+    /**
+     * Transition the element to the desired relative position via provided transition.
+     *  For example, calling this with [0,0] will not change the position.
+     *  Callback will be executed on completion.
+     *
+     * @method setRelativePosition
+     *
+     * @param {array<number>} position end state to which we interpolate
+     * @param {transition} transition transition object specifying how object moves to new position
+     * @param {function} callback zero-argument function to call on observed completion
+     */
+    Draggable.prototype.setRelativePosition = function setRelativePosition(position, transition, callback) {
+        var currPos = this.getPosition();
+        var relativePosition = [currPos[0] + position[0], currPos[1] + position[1]];
+        this.setPosition(relativePosition, transition, callback);
+    };
+
+    /**
+     * Transition the element to the desired absolute position via provided transition.
+     *  Callback will be executed on completion.
+     *
+     * @method setPosition
+     *
+     * @param {array<number>} position end state to which we interpolate
+     * @param {transition} transition transition object specifying how object moves to new position
+     * @param {function} callback zero-argument function to call on observed completion
+     */
+    Draggable.prototype.setPosition = function setPosition(position, transition, callback) {
+        if (this._positionState.isActive()) this._positionState.halt();
+        this._positionState.set(position, transition, callback);
+    };
+
+    /**
+     * Set this draggable to respond to user input.
+     *
+     * @method activate
+     *
+     */
+    Draggable.prototype.activate = function activate() {
+        this._active = true;
+    };
+
+    /**
+     * Set this draggable to ignore user input.
+     *
+     * @method deactivate
+     *
+     */
+    Draggable.prototype.deactivate = function deactivate() {
+        this._active = false;
+    };
+
+    /**
+     * Switch the input response stage between active and inactive.
+     *
+     * @method toggle
+     *
+     */
+    Draggable.prototype.toggle = function toggle() {
+        this._active = !this._active;
+    };
+
+    /**
+     * Return render spec for this Modifier, applying to the provided
+     *    target component.  This is similar to render() for Surfaces.
+     *
+     * @private
+     * @method modify
+     *
+     * @param {Object} target (already rendered) render spec to
+     *    which to apply the transform.
+     * @return {Object} render spec for this Modifier, including the
+     *    provided target
+     */
+    Draggable.prototype.modify = function modify(target) {
+        var pos = this.getPosition();
+        return {
+            transform: Transform.translate(pos[0], pos[1]),
+            target: target
+        };
+    };
+
+    module.exports = Draggable;
+
+
+define('famous/modifiers/Fader',['require','exports','module','famous/transitions/Transitionable','famous/core/OptionsManager'],function(require, exports, module) {
+    var Transitionable = require('famous/transitions/Transitionable');
+    var OptionsManager = require('famous/core/OptionsManager');
+
+    /**
+     * Modifier that allows you to fade the opacity of affected renderables in and out.
+     * @class Fader
+     * @constructor
+     * @param {Object} [options] options configuration object.
+     * @param {Boolean} [options.cull=false] Stops returning affected renderables up the tree when they're fully faded when true.
+     * @param {Transition} [options.transition=true] The main transition for showing and hiding.
+     * @param {Transition} [options.pulseInTransition=true] Controls the transition to a pulsed state when the Fader instance's pulse
+     * method is called.
+     * @param {Transition} [options.pulseOutTransition=true]Controls the transition back from a pulsed state when the Fader instance's pulse
+     * method is called.
+     *
+     */
+    function Fader(options, startState) {
+        this.options = Object.create(Fader.DEFAULT_OPTIONS);
+        this._optionsManager = new OptionsManager(this.options);
+
+        if (options) this.setOptions(options);
+
+        if (!startState) startState = 0;
+        this.transitionHelper = new Transitionable(startState);
+    }
+
+    Fader.DEFAULT_OPTIONS = {
+        cull: false,
+        transition: true,
+        pulseInTransition: true,
+        pulseOutTransition: true
+    };
+
+    /**
+     * Set internal options, overriding any default options
+     *
+     * @method setOptions
+     *
+     * @param {Object} [options] overrides of default options.  See constructor.
+     */
+    Fader.prototype.setOptions = function setOptions(options) {
+        return this._optionsManager.setOptions(options);
+    };
+
+    /**
+     * Fully displays the Fader instance's associated renderables.
+     *
+     * @method show
+     * @param {Transition} [transition] The transition that coordinates setting to the new state.
+     * @param {Function} [callback] A callback that executes once you've transitioned to the fully shown state.
+     */
+    Fader.prototype.show = function show(transition, callback) {
+        transition = transition || this.options.transition;
+        this.set(1, transition, callback);
+    };
+
+    /**
+     * Fully fades the Fader instance's associated renderables.
+     *
+     * @method hide
+     * @param {Transition} [transition] The transition that coordinates setting to the new state.
+     * @param {Function} [callback] A callback that executes once you've transitioned to the fully faded state.
+     */
+    Fader.prototype.hide = function hide(transition, callback) {
+        transition = transition || this.options.transition;
+        this.set(0, transition, callback);
+    };
+
+    /**
+     * Manually sets the opacity state of the fader to the passed-in one. Executes with an optional
+     * transition and callback.
+     *
+     * @method set
+     * @param {Number} state A number from zero to one: the amount of opacity you want to set to.
+     * @param {Transition} [transition] The transition that coordinates setting to the new state.
+     * @param {Function} [callback] A callback that executes once you've finished executing the pulse.
+     */
+    Fader.prototype.set = function set(state, transition, callback) {
+        this.halt();
+        this.transitionHelper.set(state, transition, callback);
+    };
+
+    /**
+     * Halt the transition
+     *
+     * @method halt
+     */
+    Fader.prototype.halt = function halt() {
+        this.transitionHelper.halt();
+    };
+
+    /**
+     * Tells you if your Fader instance is above its visibility threshold.
+     *
+     * @method isVisible
+     * @return {Boolean} Whether or not your Fader instance is visible.
+     */
+    Fader.prototype.isVisible = function isVisible() {
+        return (this.transitionHelper.get() > 0);
+    };
+
+    /**
+     * Return render spec for this Modifier, applying to the provided
+     *    target component.  This is similar to render() for Surfaces.
+     *
+     * @private
+     * @method modify
+     *
+     * @param {Object} target (already rendered) render spec to
+     *    which to apply the transform.
+     * @return {Object} render spec for this Modifier, including the
+     *    provided target
+     */
+    Fader.prototype.modify = function modify(target) {
+        var currOpacity = this.transitionHelper.get();
+        if (this.options.cull && !currOpacity) return undefined;
+        else return {opacity: currOpacity, target: target};
+    };
+
+    module.exports = Fader;
 
 
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -7617,51 +8113,332 @@ define('famous/events/EventFilter',['require','exports','module','famous/core/Ev
  * @copyright Famous Industries, Inc. 2014
  */
 
-define('famous/events/EventMapper',['require','exports','module','famous/core/EventHandler'],function(require, exports, module) {
-    var EventHandler = require('famous/core/EventHandler');
+define('famous/modifiers/ModifierChain',['require','exports','module'],function(require, exports, module) {
 
     /**
-     * EventMapper routes events to various event destinations
-     *  based on custom logic.  The function signature is arbitrary.
+     * A class to add and remove a chain of modifiers
+     *   at a single point in the render tree
      *
-     * @class EventMapper
+     * @class ModifierChain
      * @constructor
-     *
-     * @param {function} mappingFunction function to determine where
-     *  events are routed to.
      */
-    function EventMapper(mappingFunction) {
-        EventHandler.call(this);
-        this._mappingFunction = mappingFunction;
+    function ModifierChain() {
+        this._chain = [];
+        if (arguments.length) this.addModifier.apply(this, arguments);
     }
-    EventMapper.prototype = Object.create(EventHandler.prototype);
-    EventMapper.prototype.constructor = EventMapper;
-
-    EventMapper.prototype.subscribe = null;
-    EventMapper.prototype.unsubscribe = null;
 
     /**
-     * Trigger an event, sending to all mapped downstream handlers
-     *   listening for provided 'type' key.
+     * Add a modifier, or comma separated modifiers, to the modifier chain.
      *
-     * @method emit
+     * @method addModifier
      *
-     * @param {string} type event type key (for example, 'click')
-     * @param {Object} data event data
-     * @return {EventHandler} this
+     * @param {...Modifier*} varargs args list of Modifiers
      */
-    EventMapper.prototype.emit = function emit(type, data) {
-        var target = this._mappingFunction.apply(this, arguments);
-        if (target && (target.emit instanceof Function)) target.emit(type, data);
+    ModifierChain.prototype.addModifier = function addModifier(varargs) {
+        Array.prototype.push.apply(this._chain, arguments);
     };
 
     /**
-     * Alias of emit.
-     * @method trigger
+     * Remove a modifier from the modifier chain.
+     *
+     * @method removeModifier
+     *
+     * @param {Modifier} modifier
      */
-    EventMapper.prototype.trigger = EventMapper.prototype.emit;
+    ModifierChain.prototype.removeModifier = function removeModifier(modifier) {
+        var index = this._chain.indexOf(modifier);
+        if (index < 0) return;
+        this._chain.splice(index, 1);
+    };
 
-    module.exports = EventMapper;
+    /**
+     * Return render spec for this Modifier, applying to the provided
+     *    target component.  This is similar to render() for Surfaces.
+     *
+     * @private
+     * @method modify
+     *
+     * @param {Object} input (already rendered) render spec to
+     *    which to apply the transform.
+     * @return {Object} render spec for this Modifier, including the
+     *    provided target
+     */
+    ModifierChain.prototype.modify = function modify(input) {
+        var chain  = this._chain;
+        var result = input;
+        for (var i = 0; i < chain.length; i++) {
+            result = chain[i].modify(result);
+        }
+        return result;
+    };
+
+    module.exports = ModifierChain;
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: mark@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+define('famous/modifiers/StateModifier',['require','exports','module','famous/core/Modifier','famous/core/Transform','famous/transitions/Transitionable','famous/transitions/TransitionableTransform'],function(require, exports, module) {
+    var Modifier = require('famous/core/Modifier');
+    var Transform = require('famous/core/Transform');
+    var Transitionable = require('famous/transitions/Transitionable');
+    var TransitionableTransform = require('famous/transitions/TransitionableTransform');
+
+    /**
+     *  A collection of visual changes to be
+     *    applied to another renderable component, strongly coupled with the state that defines
+     *    those changes. This collection includes a
+     *    transform matrix, an opacity constant, a size, an origin specifier, and an alignment specifier.
+     *    StateModifier objects can be added to any RenderNode or object
+     *    capable of displaying renderables.  The StateModifier's children and descendants
+     *    are transformed by the amounts specified in the modifier's properties.
+     *
+     * @class StateModifier
+     * @constructor
+     * @param {Object} [options] overrides of default options
+     * @param {Transform} [options.transform] affine transformation matrix
+     * @param {Number} [options.opacity]
+     * @param {Array.Number} [options.origin] origin adjustment
+     * @param {Array.Number} [options.align] align adjustment
+     * @param {Array.Number} [options.size] size to apply to descendants
+     */
+    function StateModifier(options) {
+        this._transformState = new TransitionableTransform(Transform.identity);
+        this._opacityState = new Transitionable(1);
+        this._originState = new Transitionable([0, 0]);
+        this._alignState = new Transitionable([0, 0]);
+        this._sizeState = new Transitionable([0, 0]);
+
+        this._modifier = new Modifier({
+            transform: this._transformState,
+            opacity: this._opacityState,
+            origin: null,
+            align: null,
+            size: null
+        });
+
+        this._hasOrigin = false;
+        this._hasAlign = false;
+        this._hasSize = false;
+
+        if (options) {
+            if (options.transform) this.setTransform(options.transform);
+            if (options.opacity !== undefined) this.setOpacity(options.opacity);
+            if (options.origin) this.setOrigin(options.origin);
+            if (options.align) this.setAlign(options.align);
+            if (options.size) this.setSize(options.size);
+        }
+    }
+
+    /**
+     * Set the transform matrix of this modifier, either statically or
+     *   through a provided Transitionable.
+     *
+     * @method setTransform
+     *
+     * @param {Transform} transform Transform to transition to.
+     * @param {Transitionable} [transition] Valid transitionable object
+     * @param {Function} [callback] callback to call after transition completes
+     * @return {StateModifier} this
+     */
+    StateModifier.prototype.setTransform = function setTransform(transform, transition, callback) {
+        this._transformState.set(transform, transition, callback);
+        return this;
+    };
+
+    /**
+     * Set the opacity of this modifier, either statically or
+     *   through a provided Transitionable.
+     *
+     * @method setOpacity
+     *
+     * @param {Number} opacity Opacity value to transition to.
+     * @param {Transitionable} transition Valid transitionable object
+     * @param {Function} callback callback to call after transition completes
+     * @return {StateModifier} this
+     */
+    StateModifier.prototype.setOpacity = function setOpacity(opacity, transition, callback) {
+        this._opacityState.set(opacity, transition, callback);
+        return this;
+    };
+
+    /**
+     * Set the origin of this modifier, either statically or
+     *   through a provided Transitionable.
+     *
+     * @method setOrigin
+     *
+     * @param {Array.Number} origin two element array with values between 0 and 1.
+     * @param {Transitionable} transition Valid transitionable object
+     * @param {Function} callback callback to call after transition completes
+     * @return {StateModifier} this
+     */
+    StateModifier.prototype.setOrigin = function setOrigin(origin, transition, callback) {
+        if (origin === null) {
+            if (this._hasOrigin) {
+                this._modifier.originFrom(null);
+                this._hasOrigin = false;
+            }
+            return this;
+        }
+        else if (!this._hasOrigin) {
+            this._hasOrigin = true;
+            this._modifier.originFrom(this._originState);
+        }
+        this._originState.set(origin, transition, callback);
+        return this;
+    };
+
+    /**
+     * Set the alignment of this modifier, either statically or
+     *   through a provided Transitionable.
+     *
+     * @method setAlign
+     *
+     * @param {Array.Number} align two element array with values between 0 and 1.
+     * @param {Transitionable} transition Valid transitionable object
+     * @param {Function} callback callback to call after transition completes
+     * @return {StateModifier} this
+     */
+    StateModifier.prototype.setAlign = function setOrigin(align, transition, callback) {
+        if (align === null) {
+            if (this._hasAlign) {
+                this._modifier.alignFrom(null);
+                this._hasAlign = false;
+            }
+            return this;
+        }
+        else if (!this._hasAlign) {
+            this._hasAlign = true;
+            this._modifier.alignFrom(this._alignState);
+        }
+        this._alignState.set(align, transition, callback);
+        return this;
+    };
+
+    /**
+     * Set the size of this modifier, either statically or
+     *   through a provided Transitionable.
+     *
+     * @method setSize
+     *
+     * @param {Array.Number} size two element array with values between 0 and 1.
+     * @param {Transitionable} transition Valid transitionable object
+     * @param {Function} callback callback to call after transition completes
+     * @return {StateModifier} this
+     */
+    StateModifier.prototype.setSize = function setSize(size, transition, callback) {
+        if (size === null) {
+            if (this._hasSize) {
+                this._modifier.sizeFrom(null);
+                this._hasSize = false;
+            }
+            return this;
+        }
+        else if (!this._hasSize) {
+            this._hasSize = true;
+            this._modifier.sizeFrom(this._sizeState);
+        }
+        this._sizeState.set(size, transition, callback);
+        return this;
+    };
+
+    /**
+     * Stop the transition.
+     *
+     * @method halt
+     */
+    StateModifier.prototype.halt = function halt() {
+        this._transformState.halt();
+        this._opacityState.halt();
+        this._originState.halt();
+        this._alignState.halt();
+        this._sizeState.halt();
+    };
+
+    /**
+     * Get the current state of the transform matrix component.
+     *
+     * @method getTransform
+     * @return {Object} transform provider object
+     */
+    StateModifier.prototype.getTransform = function getTransform() {
+        return this._transformState.get();
+    };
+
+    /**
+     * Get the destination state of the transform component.
+     *
+     * @method getFinalTransform
+     * @return {Transform} transform matrix
+     */
+    StateModifier.prototype.getFinalTransform = function getFinalTransform() {
+        return this._transformState.getFinal();
+    };
+
+    /**
+     * Get the current state of the opacity component.
+     *
+     * @method getOpacity
+     * @return {Object} opacity provider object
+     */
+    StateModifier.prototype.getOpacity = function getOpacity() {
+        return this._opacityState.get();
+    };
+
+    /**
+     * Get the current state of the origin component.
+     *
+     * @method getOrigin
+     * @return {Object} origin provider object
+     */
+    StateModifier.prototype.getOrigin = function getOrigin() {
+        return this._hasOrigin ? this._originState.get() : null;
+    };
+
+    /**
+     * Get the current state of the align component.
+     *
+     * @method getAlign
+     * @return {Object} align provider object
+     */
+    StateModifier.prototype.getAlign = function getAlign() {
+        return this._hasAlign ? this._alignState.get() : null;
+    };
+
+    /**
+     * Get the current state of the size component.
+     *
+     * @method getSize
+     * @return {Object} size provider object
+     */
+    StateModifier.prototype.getSize = function getSize() {
+        return this._hasSize ? this._sizeState.get() : null;
+    };
+
+    /**
+     * Return render spec for this StateModifier, applying to the provided
+     *    target component.  This is similar to render() for Surfaces.
+     *
+     * @private
+     * @method modify
+     *
+     * @param {Object} target (already rendered) render spec to
+     *    which to apply the transform.
+     * @return {Object} render spec for this StateModifier, including the
+     *    provided target
+     */
+    StateModifier.prototype.modify = function modify(target) {
+        return this._modifier.modify(target);
+    };
+
+    module.exports = StateModifier;
 
 
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -8124,1126 +8901,6 @@ define('famous/physics/PhysicsEngine',['require','exports','module','famous/core
     };
 
     module.exports = PhysicsEngine;
-
-
-define('famous/inputs/Accumulator',['require','exports','module','famous/core/EventHandler','famous/transitions/Transitionable'],function(require, exports, module) {
-    var EventHandler = require('famous/core/EventHandler');
-    var Transitionable = require('famous/transitions/Transitionable');
-
-    /**
-     * Accumulates differentials of event sources that emit a `delta`
-     *  attribute taking a Number or Array of Number types. The accumulated
-     *  value is stored in a getter/setter.
-     *
-     * @class Accumulator
-     * @constructor
-     * @param value {Number|Array|Transitionable}   Initializing value
-     * @param [eventName='update'] {String}         Name of update event
-     */
-    function Accumulator(value, eventName) {
-        if (eventName === undefined) eventName = 'update';
-
-        this._state = (value && value.get && value.set)
-            ? value
-            : new Transitionable(value || 0);
-
-        this._eventInput = new EventHandler();
-        EventHandler.setInputHandler(this, this._eventInput);
-
-        this._eventInput.on(eventName, _handleUpdate.bind(this));
-    }
-
-    function _handleUpdate(data) {
-        var delta = data.delta;
-        var state = this.get();
-
-        if (delta.constructor === state.constructor){
-            var newState = (delta instanceof Array)
-                ? [state[0] + delta[0], state[1] + delta[1]]
-                : state + delta;
-            this.set(newState);
-        }
-    }
-
-    /**
-     * Basic getter
-     *
-     * @method get
-     * @return {Number|Array} current value
-     */
-    Accumulator.prototype.get = function get() {
-        return this._state.get();
-    };
-
-    /**
-     * Basic setter
-     *
-     * @method set
-     * @param value {Number|Array} new value
-     */
-    Accumulator.prototype.set = function set(value) {
-        this._state.set(value);
-    };
-
-    module.exports = Accumulator;
-
-
-define('famous/inputs/DesktopEmulationMode',['require','exports','module'],function(require, exports, module) {
-    var hasTouch = 'ontouchstart' in window;
-
-    function kill(type) {
-        window.addEventListener(type, function(event) {
-            event.stopPropagation();
-            return false;
-        }, true);
-    }
-
-    if (hasTouch) {
-        kill('mousedown');
-        kill('mousemove');
-        kill('mouseup');
-        kill('mouseleave');
-    }
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: mark@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/inputs/FastClick',['require','exports','module'],function(require, exports, module) {
-    /**
-     * FastClick is an override shim which maps event pairs of
-     *   'touchstart' and 'touchend' which differ by less than a certain
-     *   threshold to the 'click' event.
-     *   This is used to speed up clicks on some browsers.
-     */
-    if (!window.CustomEvent) return;
-    var clickThreshold = 300;
-    var clickWindow = 500;
-    var potentialClicks = {};
-    var recentlyDispatched = {};
-    var _now = Date.now;
-
-    window.addEventListener('touchstart', function(event) {
-        var timestamp = _now();
-        for (var i = 0; i < event.changedTouches.length; i++) {
-            var touch = event.changedTouches[i];
-            potentialClicks[touch.identifier] = timestamp;
-        }
-    });
-
-    window.addEventListener('touchmove', function(event) {
-        for (var i = 0; i < event.changedTouches.length; i++) {
-            var touch = event.changedTouches[i];
-            delete potentialClicks[touch.identifier];
-        }
-    });
-
-    window.addEventListener('touchend', function(event) {
-        var currTime = _now();
-        for (var i = 0; i < event.changedTouches.length; i++) {
-            var touch = event.changedTouches[i];
-            var startTime = potentialClicks[touch.identifier];
-            if (startTime && currTime - startTime < clickThreshold) {
-                var clickEvt = new window.CustomEvent('click', {
-                    'bubbles': true,
-                    'details': touch
-                });
-                recentlyDispatched[currTime] = event;
-                event.target.dispatchEvent(clickEvt);
-            }
-            delete potentialClicks[touch.identifier];
-        }
-    });
-
-    window.addEventListener('click', function(event) {
-        var currTime = _now();
-        for (var i in recentlyDispatched) {
-            var previousEvent = recentlyDispatched[i];
-            if (currTime - i < clickWindow) {
-                if (event instanceof window.MouseEvent && event.target === previousEvent.target) event.stopPropagation();
-            }
-            else delete recentlyDispatched[i];
-        }
-    }, true);
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: mark@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/inputs/TwoFingerSync',['require','exports','module','famous/core/EventHandler'],function(require, exports, module) {
-    var EventHandler = require('famous/core/EventHandler');
-
-    /**
-     * Helper to PinchSync, RotateSync, and ScaleSync.  Generalized handling of
-     *   two-finger touch events.
-     *   This class is meant to be overridden and not used directly.
-     *
-     * @class TwoFingerSync
-     * @constructor
-     */
-    function TwoFingerSync() {
-        this._eventInput = new EventHandler();
-        this._eventOutput = new EventHandler();
-
-        EventHandler.setInputHandler(this, this._eventInput);
-        EventHandler.setOutputHandler(this, this._eventOutput);
-
-        this.touchAEnabled = false;
-        this.touchAId = 0;
-        this.posA = null;
-        this.timestampA = 0;
-        this.touchBEnabled = false;
-        this.touchBId = 0;
-        this.posB = null;
-        this.timestampB = 0;
-
-        this._eventInput.on('touchstart', this.handleStart.bind(this));
-        this._eventInput.on('touchmove', this.handleMove.bind(this));
-        this._eventInput.on('touchend', this.handleEnd.bind(this));
-        this._eventInput.on('touchcancel', this.handleEnd.bind(this));
-    }
-
-    TwoFingerSync.calculateAngle = function(posA, posB) {
-        var diffX = posB[0] - posA[0];
-        var diffY = posB[1] - posA[1];
-        return Math.atan2(diffY, diffX);
-    };
-
-    TwoFingerSync.calculateDistance = function(posA, posB) {
-        var diffX = posB[0] - posA[0];
-        var diffY = posB[1] - posA[1];
-        return Math.sqrt(diffX * diffX + diffY * diffY);
-    };
-
-    TwoFingerSync.calculateCenter = function(posA, posB) {
-        return [(posA[0] + posB[0]) / 2.0, (posA[1] + posB[1]) / 2.0];
-    };
-
-    var _now = Date.now;
-
-    // private
-    TwoFingerSync.prototype.handleStart = function handleStart(event) {
-        for (var i = 0; i < event.changedTouches.length; i++) {
-            var touch = event.changedTouches[i];
-            if (!this.touchAEnabled) {
-                this.touchAId = touch.identifier;
-                this.touchAEnabled = true;
-                this.posA = [touch.pageX, touch.pageY];
-                this.timestampA = _now();
-            }
-            else if (!this.touchBEnabled) {
-                this.touchBId = touch.identifier;
-                this.touchBEnabled = true;
-                this.posB = [touch.pageX, touch.pageY];
-                this.timestampB = _now();
-                this._startUpdate(event);
-            }
-        }
-    };
-
-    // private
-    TwoFingerSync.prototype.handleMove = function handleMove(event) {
-        if (!(this.touchAEnabled && this.touchBEnabled)) return;
-        var prevTimeA = this.timestampA;
-        var prevTimeB = this.timestampB;
-        var diffTime;
-        for (var i = 0; i < event.changedTouches.length; i++) {
-            var touch = event.changedTouches[i];
-            if (touch.identifier === this.touchAId) {
-                this.posA = [touch.pageX, touch.pageY];
-                this.timestampA = _now();
-                diffTime = this.timestampA - prevTimeA;
-            }
-            else if (touch.identifier === this.touchBId) {
-                this.posB = [touch.pageX, touch.pageY];
-                this.timestampB = _now();
-                diffTime = this.timestampB - prevTimeB;
-            }
-        }
-        if (diffTime) this._moveUpdate(diffTime);
-    };
-
-    // private
-    TwoFingerSync.prototype.handleEnd = function handleEnd(event) {
-        for (var i = 0; i < event.changedTouches.length; i++) {
-            var touch = event.changedTouches[i];
-            if (touch.identifier === this.touchAId || touch.identifier === this.touchBId) {
-                if (this.touchAEnabled && this.touchBEnabled) {
-                    this._eventOutput.emit('end', {
-                        touches : [this.touchAId, this.touchBId],
-                        angle   : this._angle
-                    });
-                }
-                this.touchAEnabled = false;
-                this.touchAId = 0;
-                this.touchBEnabled = false;
-                this.touchBId = 0;
-            }
-        }
-    };
-
-    module.exports = TwoFingerSync;
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: mark@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/inputs/PinchSync',['require','exports','module','./TwoFingerSync'],function(require, exports, module) {
-    var TwoFingerSync = require('./TwoFingerSync');
-
-    /**
-     * Handles piped in two-finger touch events to change position via pinching / expanding.
-     *   Emits 'start', 'update' and 'end' events with
-     *   position, velocity, touch ids, and distance between fingers.
-     *
-     * @class PinchSync
-     * @extends TwoFingerSync
-     * @constructor
-     * @param {Object} options default options overrides
-     * @param {Number} [options.scale] scale velocity by this factor
-     */
-    function PinchSync(options) {
-        TwoFingerSync.call(this);
-
-        this.options = Object.create(PinchSync.DEFAULT_OPTIONS);
-        if (options) this.setOptions(options);
-
-        this._displacement = 0;
-        this._previousDistance = 0;
-    }
-
-    PinchSync.prototype = Object.create(TwoFingerSync.prototype);
-    PinchSync.prototype.constructor = PinchSync;
-
-    PinchSync.DEFAULT_OPTIONS = {
-        scale : 1
-    };
-
-    PinchSync.prototype._startUpdate = function _startUpdate(event) {
-        this._previousDistance = TwoFingerSync.calculateDistance(this.posA, this.posB);
-        this._displacement = 0;
-
-        this._eventOutput.emit('start', {
-            count: event.touches.length,
-            touches: [this.touchAId, this.touchBId],
-            distance: this._dist,
-            center: TwoFingerSync.calculateCenter(this.posA, this.posB)
-        });
-    };
-
-    PinchSync.prototype._moveUpdate = function _moveUpdate(diffTime) {
-        var currDist = TwoFingerSync.calculateDistance(this.posA, this.posB);
-        var center = TwoFingerSync.calculateCenter(this.posA, this.posB);
-
-        var scale = this.options.scale;
-        var delta = scale * (currDist - this._previousDistance);
-        var velocity = delta / diffTime;
-
-        this._previousDistance = currDist;
-        this._displacement += delta;
-
-        this._eventOutput.emit('update', {
-            delta : delta,
-            velocity: velocity,
-            distance: currDist,
-            displacement: this._displacement,
-            center: center,
-            touches: [this.touchAId, this.touchBId]
-        });
-    };
-
-    /**
-     * Return entire options dictionary, including defaults.
-     *
-     * @method getOptions
-     * @return {Object} configuration options
-     */
-    PinchSync.prototype.getOptions = function getOptions() {
-        return this.options;
-    };
-
-    /**
-     * Set internal options, overriding any default options
-     *
-     * @method setOptions
-     *
-     * @param {Object} [options] overrides of default options
-     * @param {Number} [options.scale] scale velocity by this factor
-     */
-    PinchSync.prototype.setOptions = function setOptions(options) {
-        if (options.scale !== undefined) this.options.scale = options.scale;
-    };
-
-    module.exports = PinchSync;
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: mark@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/inputs/RotateSync',['require','exports','module','./TwoFingerSync'],function(require, exports, module) {
-    var TwoFingerSync = require('./TwoFingerSync');
-
-    /**
-     * Handles piped in two-finger touch events to increase or decrease scale via pinching / expanding.
-     *   Emits 'start', 'update' and 'end' events an object with position, velocity, touch ids, and angle.
-     *   Useful for determining a rotation factor from initial two-finger touch.
-     *
-     * @class RotateSync
-     * @extends TwoFingerSync
-     * @constructor
-     * @param {Object} options default options overrides
-     * @param {Number} [options.scale] scale velocity by this factor
-     */
-    function RotateSync(options) {
-        TwoFingerSync.call(this);
-
-        this.options = Object.create(RotateSync.DEFAULT_OPTIONS);
-        if (options) this.setOptions(options);
-
-        this._angle = 0;
-        this._previousAngle = 0;
-    }
-
-    RotateSync.prototype = Object.create(TwoFingerSync.prototype);
-    RotateSync.prototype.constructor = RotateSync;
-
-    RotateSync.DEFAULT_OPTIONS = {
-        scale : 1
-    };
-
-    RotateSync.prototype._startUpdate = function _startUpdate(event) {
-        this._angle = 0;
-        this._previousAngle = TwoFingerSync.calculateAngle(this.posA, this.posB);
-        var center = TwoFingerSync.calculateCenter(this.posA, this.posB);
-        this._eventOutput.emit('start', {
-            count: event.touches.length,
-            angle: this._angle,
-            center: center,
-            touches: [this.touchAId, this.touchBId]
-        });
-    };
-
-    RotateSync.prototype._moveUpdate = function _moveUpdate(diffTime) {
-        var scale = this.options.scale;
-
-        var currAngle = TwoFingerSync.calculateAngle(this.posA, this.posB);
-        var center = TwoFingerSync.calculateCenter(this.posA, this.posB);
-
-        var diffTheta = scale * (currAngle - this._previousAngle);
-        var velTheta = diffTheta / diffTime;
-
-        this._angle += diffTheta;
-
-        this._eventOutput.emit('update', {
-            delta : diffTheta,
-            velocity: velTheta,
-            angle: this._angle,
-            center: center,
-            touches: [this.touchAId, this.touchBId]
-        });
-
-        this._previousAngle = currAngle;
-    };
-
-    /**
-     * Return entire options dictionary, including defaults.
-     *
-     * @method getOptions
-     * @return {Object} configuration options
-     */
-    RotateSync.prototype.getOptions = function getOptions() {
-        return this.options;
-    };
-
-    /**
-     * Set internal options, overriding any default options
-     *
-     * @method setOptions
-     *
-     * @param {Object} [options] overrides of default options
-     * @param {Number} [options.scale] scale velocity by this factor
-     */
-    RotateSync.prototype.setOptions = function setOptions(options) {
-        if (options.scale !== undefined) this.options.scale = options.scale;
-    };
-
-    module.exports = RotateSync;
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: mark@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/inputs/ScaleSync',['require','exports','module','./TwoFingerSync'],function(require, exports, module) {
-    var TwoFingerSync = require('./TwoFingerSync');
-
-    /**
-     * Handles piped in two-finger touch events to increase or decrease scale via pinching / expanding.
-     *   Emits 'start', 'update' and 'end' events an object with position, velocity, touch ids, distance, and scale factor.
-     *   Useful for determining a scaling factor from initial two-finger touch.
-     *
-     * @class ScaleSync
-     * @extends TwoFingerSync
-     * @constructor
-     * @param {Object} options default options overrides
-     * @param {Number} [options.scale] scale velocity by this factor
-     */
-    function ScaleSync(options) {
-        TwoFingerSync.call(this);
-
-        this.options = Object.create(ScaleSync.DEFAULT_OPTIONS);
-        if (options) this.setOptions(options);
-
-        this._scaleFactor = 1;
-        this._startDist = 0;
-        this._eventInput.on('pipe', _reset.bind(this));
-    }
-
-    ScaleSync.prototype = Object.create(TwoFingerSync.prototype);
-    ScaleSync.prototype.constructor = ScaleSync;
-
-    ScaleSync.DEFAULT_OPTIONS = {
-        scale : 1
-    };
-
-    function _reset() {
-        this.touchAId = undefined;
-        this.touchBId = undefined;
-    }
-
-    // handles initial touch of two fingers
-    ScaleSync.prototype._startUpdate = function _startUpdate(event) {
-        this._scaleFactor = 1;
-        this._startDist = TwoFingerSync.calculateDistance(this.posA, this.posB);
-        this._eventOutput.emit('start', {
-            count: event.touches.length,
-            touches: [this.touchAId, this.touchBId],
-            distance: this._startDist,
-            center: TwoFingerSync.calculateCenter(this.posA, this.posB)
-        });
-    };
-
-    // handles movement of two fingers
-    ScaleSync.prototype._moveUpdate = function _moveUpdate(diffTime) {
-        var scale = this.options.scale;
-
-        var currDist = TwoFingerSync.calculateDistance(this.posA, this.posB);
-        var center = TwoFingerSync.calculateCenter(this.posA, this.posB);
-
-        var delta = (currDist - this._startDist) / this._startDist;
-        var newScaleFactor = Math.max(1 + scale * delta, 0);
-        var veloScale = (newScaleFactor - this._scaleFactor) / diffTime;
-
-        this._eventOutput.emit('update', {
-            delta : delta,
-            scale: newScaleFactor,
-            velocity: veloScale,
-            distance: currDist,
-            center : center,
-            touches: [this.touchAId, this.touchBId]
-        });
-
-        this._scaleFactor = newScaleFactor;
-    };
-
-    /**
-     * Return entire options dictionary, including defaults.
-     *
-     * @method getOptions
-     * @return {Object} configuration options
-     */
-    ScaleSync.prototype.getOptions = function getOptions() {
-        return this.options;
-    };
-
-    /**
-     * Set internal options, overriding any default options
-     *
-     * @method setOptions
-     *
-     * @param {Object} [options] overrides of default options
-     * @param {Number} [options.scale] scale velocity by this factor
-     */
-    ScaleSync.prototype.setOptions = function setOptions(options) {
-        if (options.scale !== undefined) this.options.scale = options.scale;
-    };
-
-    module.exports = ScaleSync;
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: mark@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/inputs/ScrollSync',['require','exports','module','famous/core/EventHandler','famous/core/Engine'],function(require, exports, module) {
-    var EventHandler = require('famous/core/EventHandler');
-    var Engine = require('famous/core/Engine');
-
-    /**
-     * Handles piped in mousewheel events.
-     *   Emits 'start', 'update', and 'end' events with payloads including:
-     *   delta: change since last position,
-     *   position: accumulated deltas,
-     *   velocity: speed of change in pixels per ms,
-     *   slip: true (unused).
-     *
-     *   Can be used as delegate of GenericSync.
-     *
-     * @class ScrollSync
-     * @constructor
-     * @param {Object} [options] overrides of default options
-     * @param {Number} [options.direction] Pay attention to x changes (ScrollSync.DIRECTION_X),
-     *   y changes (ScrollSync.DIRECTION_Y) or both (undefined)
-     * @param {Number} [options.minimumEndSpeed] End speed calculation floors at this number, in pixels per ms
-     * @param {boolean} [options.rails] whether to snap position calculations to nearest axis
-     * @param {Number | Array.Number} [options.scale] scale outputs in by scalar or pair of scalars
-     * @param {Number} [options.stallTime] reset time for velocity calculation in ms
-     */
-    function ScrollSync(options) {
-        this.options = Object.create(ScrollSync.DEFAULT_OPTIONS);
-        if (options) this.setOptions(options);
-
-        this._payload = {
-            delta    : null,
-            position : null,
-            velocity : null,
-            slip     : true
-        };
-
-        this._eventInput = new EventHandler();
-        this._eventOutput = new EventHandler();
-
-        EventHandler.setInputHandler(this, this._eventInput);
-        EventHandler.setOutputHandler(this, this._eventOutput);
-
-        this._position = (this.options.direction === undefined) ? [0,0] : 0;
-        this._prevTime = undefined;
-        this._prevVel = undefined;
-        this._eventInput.on('mousewheel', _handleMove.bind(this));
-        this._eventInput.on('wheel', _handleMove.bind(this));
-        this._inProgress = false;
-        this._loopBound = false;
-    }
-
-    ScrollSync.DEFAULT_OPTIONS = {
-        direction: undefined,
-        minimumEndSpeed: Infinity,
-        rails: false,
-        scale: 1,
-        stallTime: 50,
-        lineHeight: 40
-    };
-
-    ScrollSync.DIRECTION_X = 0;
-    ScrollSync.DIRECTION_Y = 1;
-
-    var MINIMUM_TICK_TIME = 8;
-
-    var _now = Date.now;
-
-    function _newFrame() {
-        if (this._inProgress && (_now() - this._prevTime) > this.options.stallTime) {
-            this._position = (this.options.direction === undefined) ? [0,0] : 0;
-            this._inProgress = false;
-
-            var finalVel = (Math.abs(this._prevVel) >= this.options.minimumEndSpeed)
-                ? this._prevVel
-                : 0;
-
-            var payload = this._payload;
-            payload.position = this._position;
-            payload.velocity = finalVel;
-            payload.slip = true;
-
-            this._eventOutput.emit('end', payload);
-        }
-    }
-
-    function _handleMove(event) {
-        event.preventDefault();
-
-        if (!this._inProgress) {
-            this._inProgress = true;
-
-            payload = this._payload;
-            payload.slip = true;
-            payload.position = this._position;
-            payload.clientX = event.clientX;
-            payload.clientY = event.clientY;
-            payload.offsetX = event.offsetX;
-            payload.offsetY = event.offsetY;
-            this._eventOutput.emit('start', payload);
-            if (!this._loopBound) {
-                Engine.on('prerender', _newFrame.bind(this));
-                this._loopBound = true;
-            }
-        }
-
-        var currTime = _now();
-        var prevTime = this._prevTime || currTime;
-
-        var diffX = (event.wheelDeltaX !== undefined) ? event.wheelDeltaX : -event.deltaX;
-        var diffY = (event.wheelDeltaY !== undefined) ? event.wheelDeltaY : -event.deltaY;
-
-        if (event.deltaMode === 1) { // units in lines, not pixels
-            diffX *= this.options.lineHeight;
-            diffY *= this.options.lineHeight;
-        }
-
-        if (this.options.rails) {
-            if (Math.abs(diffX) > Math.abs(diffY)) diffY = 0;
-            else diffX = 0;
-        }
-
-        var diffTime = Math.max(currTime - prevTime, MINIMUM_TICK_TIME); // minimum tick time
-
-        var velX = diffX / diffTime;
-        var velY = diffY / diffTime;
-
-        var scale = this.options.scale;
-        var nextVel;
-        var nextDelta;
-
-        if (this.options.direction === ScrollSync.DIRECTION_X) {
-            nextDelta = scale * diffX;
-            nextVel = scale * velX;
-            this._position += nextDelta;
-        }
-        else if (this.options.direction === ScrollSync.DIRECTION_Y) {
-            nextDelta = scale * diffY;
-            nextVel = scale * velY;
-            this._position += nextDelta;
-        }
-        else {
-            nextDelta = [scale * diffX, scale * diffY];
-            nextVel = [scale * velX, scale * velY];
-            this._position[0] += nextDelta[0];
-            this._position[1] += nextDelta[1];
-        }
-
-        var payload = this._payload;
-        payload.delta    = nextDelta;
-        payload.velocity = nextVel;
-        payload.position = this._position;
-        payload.slip     = true;
-
-        this._eventOutput.emit('update', payload);
-
-        this._prevTime = currTime;
-        this._prevVel = nextVel;
-    }
-
-    /**
-     * Return entire options dictionary, including defaults.
-     *
-     * @method getOptions
-     * @return {Object} configuration options
-     */
-    ScrollSync.prototype.getOptions = function getOptions() {
-        return this.options;
-    };
-
-    /**
-     * Set internal options, overriding any default options
-     *
-     * @method setOptions
-     *
-     * @param {Object} [options] overrides of default options
-     * @param {Number} [options.minimimEndSpeed] If final velocity smaller than this, round down to 0.
-     * @param {Number} [options.stallTime] ms of non-motion before 'end' emitted
-     * @param {Number} [options.rails] whether to constrain to nearest axis.
-     * @param {Number} [options.direction] ScrollSync.DIRECTION_X, DIRECTION_Y -
-     *    pay attention to one specific direction.
-     * @param {Number} [options.scale] constant factor to scale velocity output
-     */
-    ScrollSync.prototype.setOptions = function setOptions(options) {
-        if (options.direction !== undefined) this.options.direction = options.direction;
-        if (options.minimumEndSpeed !== undefined) this.options.minimumEndSpeed = options.minimumEndSpeed;
-        if (options.rails !== undefined) this.options.rails = options.rails;
-        if (options.scale !== undefined) this.options.scale = options.scale;
-        if (options.stallTime !== undefined) this.options.stallTime = options.stallTime;
-    };
-
-    module.exports = ScrollSync;
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: david@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/transitions/CachedMap',['require','exports','module'],function(require, exports, module) {
-    /**
-     * A simple in-memory object cache.  Used as a helper for Views with
-     * provider functions.
-     * @class CachedMap
-     * @constructor
-     */
-    function CachedMap(mappingFunction) {
-        this._map = mappingFunction || null;
-        this._cachedOutput = null;
-        this._cachedInput = Number.NaN; //never valid as input
-    }
-
-    /**
-     * Creates a mapping function with a cache.
-     * This is the main entrypoint for this object.
-     * @static
-     * @method create
-     * @param {function} mappingFunction mapping
-     * @return {function} memoized mapping function
-     */
-    CachedMap.create = function create(mappingFunction) {
-        var instance = new CachedMap(mappingFunction);
-        return instance.get.bind(instance);
-    };
-
-    /**
-     * Retrieve items from cache or from mapping functin.
-     *
-     * @method get
-     * @param {Object} input input key
-     */
-    CachedMap.prototype.get = function get(input) {
-        if (input !== this._cachedInput) {
-            this._cachedInput = input;
-            this._cachedOutput = this._map(input);
-        }
-        return this._cachedOutput;
-    };
-
-    module.exports = CachedMap;
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: david@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/transitions/Easing',['require','exports','module'],function(require, exports, module) {
-
-    /*
-     * A library of curves which map an animation explicitly as a function of time.
-     *
-     * @class Easing
-     */
-    var Easing = {
-
-        /**
-         * @property inQuad
-         * @static
-         */
-        inQuad: function(t) {
-            return t*t;
-        },
-
-        /**
-         * @property outQuad
-         * @static
-         */
-        outQuad: function(t) {
-            return -(t-=1)*t+1;
-        },
-
-        /**
-         * @property inOutQuad
-         * @static
-         */
-        inOutQuad: function(t) {
-            if ((t/=.5) < 1) return .5*t*t;
-            return -.5*((--t)*(t-2) - 1);
-        },
-
-        /**
-         * @property inCubic
-         * @static
-         */
-        inCubic: function(t) {
-            return t*t*t;
-        },
-
-        /**
-         * @property outCubic
-         * @static
-         */
-        outCubic: function(t) {
-            return ((--t)*t*t + 1);
-        },
-
-        /**
-         * @property inOutCubic
-         * @static
-         */
-        inOutCubic: function(t) {
-            if ((t/=.5) < 1) return .5*t*t*t;
-            return .5*((t-=2)*t*t + 2);
-        },
-
-        /**
-         * @property inQuart
-         * @static
-         */
-        inQuart: function(t) {
-            return t*t*t*t;
-        },
-
-        /**
-         * @property outQuart
-         * @static
-         */
-        outQuart: function(t) {
-            return -((--t)*t*t*t - 1);
-        },
-
-        /**
-         * @property inOutQuart
-         * @static
-         */
-        inOutQuart: function(t) {
-            if ((t/=.5) < 1) return .5*t*t*t*t;
-            return -.5 * ((t-=2)*t*t*t - 2);
-        },
-
-        /**
-         * @property inQuint
-         * @static
-         */
-        inQuint: function(t) {
-            return t*t*t*t*t;
-        },
-
-        /**
-         * @property outQuint
-         * @static
-         */
-        outQuint: function(t) {
-            return ((--t)*t*t*t*t + 1);
-        },
-
-        /**
-         * @property inOutQuint
-         * @static
-         */
-        inOutQuint: function(t) {
-            if ((t/=.5) < 1) return .5*t*t*t*t*t;
-            return .5*((t-=2)*t*t*t*t + 2);
-        },
-
-        /**
-         * @property inSine
-         * @static
-         */
-        inSine: function(t) {
-            return -1.0*Math.cos(t * (Math.PI/2)) + 1.0;
-        },
-
-        /**
-         * @property outSine
-         * @static
-         */
-        outSine: function(t) {
-            return Math.sin(t * (Math.PI/2));
-        },
-
-        /**
-         * @property inOutSine
-         * @static
-         */
-        inOutSine: function(t) {
-            return -.5*(Math.cos(Math.PI*t) - 1);
-        },
-
-        /**
-         * @property inExpo
-         * @static
-         */
-        inExpo: function(t) {
-            return (t===0) ? 0.0 : Math.pow(2, 10 * (t - 1));
-        },
-
-        /**
-         * @property outExpo
-         * @static
-         */
-        outExpo: function(t) {
-            return (t===1.0) ? 1.0 : (-Math.pow(2, -10 * t) + 1);
-        },
-
-        /**
-         * @property inOutExpo
-         * @static
-         */
-        inOutExpo: function(t) {
-            if (t===0) return 0.0;
-            if (t===1.0) return 1.0;
-            if ((t/=.5) < 1) return .5 * Math.pow(2, 10 * (t - 1));
-            return .5 * (-Math.pow(2, -10 * --t) + 2);
-        },
-
-        /**
-         * @property inCirc
-         * @static
-         */
-        inCirc: function(t) {
-            return -(Math.sqrt(1 - t*t) - 1);
-        },
-
-        /**
-         * @property outCirc
-         * @static
-         */
-        outCirc: function(t) {
-            return Math.sqrt(1 - (--t)*t);
-        },
-
-        /**
-         * @property inOutCirc
-         * @static
-         */
-        inOutCirc: function(t) {
-            if ((t/=.5) < 1) return -.5 * (Math.sqrt(1 - t*t) - 1);
-            return .5 * (Math.sqrt(1 - (t-=2)*t) + 1);
-        },
-
-        /**
-         * @property inElastic
-         * @static
-         */
-        inElastic: function(t) {
-            var s=1.70158;var p=0;var a=1.0;
-            if (t===0) return 0.0;  if (t===1) return 1.0;  if (!p) p=.3;
-            s = p/(2*Math.PI) * Math.asin(1.0/a);
-            return -(a*Math.pow(2,10*(t-=1)) * Math.sin((t-s)*(2*Math.PI)/ p));
-        },
-
-        /**
-         * @property outElastic
-         * @static
-         */
-        outElastic: function(t) {
-            var s=1.70158;var p=0;var a=1.0;
-            if (t===0) return 0.0;  if (t===1) return 1.0;  if (!p) p=.3;
-            s = p/(2*Math.PI) * Math.asin(1.0/a);
-            return a*Math.pow(2,-10*t) * Math.sin((t-s)*(2*Math.PI)/p) + 1.0;
-        },
-
-        /**
-         * @property inOutElastic
-         * @static
-         */
-        inOutElastic: function(t) {
-            var s=1.70158;var p=0;var a=1.0;
-            if (t===0) return 0.0;  if ((t/=.5)===2) return 1.0;  if (!p) p=(.3*1.5);
-            s = p/(2*Math.PI) * Math.asin(1.0/a);
-            if (t < 1) return -.5*(a*Math.pow(2,10*(t-=1)) * Math.sin((t-s)*(2*Math.PI)/p));
-            return a*Math.pow(2,-10*(t-=1)) * Math.sin((t-s)*(2*Math.PI)/p)*.5 + 1.0;
-        },
-
-        /**
-         * @property inBack
-         * @static
-         */
-        inBack: function(t, s) {
-            if (s === undefined) s = 1.70158;
-            return t*t*((s+1)*t - s);
-        },
-
-        /**
-         * @property outBack
-         * @static
-         */
-        outBack: function(t, s) {
-            if (s === undefined) s = 1.70158;
-            return ((--t)*t*((s+1)*t + s) + 1);
-        },
-
-        /**
-         * @property inOutBack
-         * @static
-         */
-        inOutBack: function(t, s) {
-            if (s === undefined) s = 1.70158;
-            if ((t/=.5) < 1) return .5*(t*t*(((s*=(1.525))+1)*t - s));
-            return .5*((t-=2)*t*(((s*=(1.525))+1)*t + s) + 2);
-        },
-
-        /**
-         * @property inBounce
-         * @static
-         */
-        inBounce: function(t) {
-            return 1.0 - Easing.outBounce(1.0-t);
-        },
-
-        /**
-         * @property outBounce
-         * @static
-         */
-        outBounce: function(t) {
-            if (t < (1/2.75)) {
-                return (7.5625*t*t);
-            } else if (t < (2/2.75)) {
-                return (7.5625*(t-=(1.5/2.75))*t + .75);
-            } else if (t < (2.5/2.75)) {
-                return (7.5625*(t-=(2.25/2.75))*t + .9375);
-            } else {
-                return (7.5625*(t-=(2.625/2.75))*t + .984375);
-            }
-        },
-
-        /**
-         * @property inOutBounce
-         * @static
-         */
-        inOutBounce: function(t) {
-            if (t < .5) return Easing.inBounce(t*2) * .5;
-            return Easing.outBounce(t*2-1.0) * .5 + .5;
-        }
-    };
-
-    module.exports = Easing;
 
 
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -9817,6 +9474,364 @@ define('famous/physics/bodies/Particle',['require','exports','module','famous/ma
  * @copyright Famous Industries, Inc. 2014
  */
 
+define('famous/physics/bodies/Body',['require','exports','module','./Particle','famous/core/Transform','famous/math/Vector','famous/math/Quaternion','famous/math/Matrix'],function(require, exports, module) {
+    var Particle = require('./Particle');
+    var Transform = require('famous/core/Transform');
+    var Vector = require('famous/math/Vector');
+    var Quaternion = require('famous/math/Quaternion');
+    var Matrix = require('famous/math/Matrix');
+
+    /**
+     * A unit controlled by the physics engine which extends the zero-dimensional
+     * Particle to include geometry. In addition to maintaining the state
+     * of a Particle its state includes orientation, angular velocity
+     * and angular momentum and responds to torque forces.
+     *
+     * @class Body
+     * @extends Particle
+     * @constructor
+     */
+    function Body(options) {
+        Particle.call(this, options);
+        options = options || {};
+
+        this.orientation     = new Quaternion();
+        this.angularVelocity = new Vector();
+        this.angularMomentum = new Vector();
+        this.torque          = new Vector();
+
+        if (options.orientation)     this.orientation.set(options.orientation);
+        if (options.angularVelocity) this.angularVelocity.set(options.angularVelocity);
+        if (options.angularMomentum) this.angularMomentum.set(options.angularMomentum);
+        if (options.torque)          this.torque.set(options.torque);
+
+        this.setMomentsOfInertia();
+
+        this.angularVelocity.w = 0;        //quaternify the angular velocity
+
+        //registers
+        this.pWorld = new Vector();        //placeholder for world space position
+    }
+
+    Body.DEFAULT_OPTIONS = Particle.DEFAULT_OPTIONS;
+    Body.DEFAULT_OPTIONS.orientation = [0,0,0,1];
+    Body.DEFAULT_OPTIONS.angularVelocity = [0,0,0];
+
+    Body.AXES = Particle.AXES;
+    Body.SLEEP_TOLERANCE = Particle.SLEEP_TOLERANCE;
+    Body.INTEGRATOR = Particle.INTEGRATOR;
+
+    Body.prototype = Object.create(Particle.prototype);
+    Body.prototype.constructor = Body;
+
+    Body.prototype.isBody = true;
+
+    Body.prototype.setMass = function setMass() {
+        Particle.prototype.setMass.apply(this, arguments);
+        this.setMomentsOfInertia();
+    };
+
+    /**
+     * Setter for moment of inertia, which is necessary to give proper
+     * angular inertia depending on the geometry of the body.
+     *
+     * @method setMomentsOfInertia
+     */
+    Body.prototype.setMomentsOfInertia = function setMomentsOfInertia() {
+        this.inertia = new Matrix();
+        this.inverseInertia = new Matrix();
+    };
+
+    /**
+     * Update the angular velocity from the angular momentum state.
+     *
+     * @method updateAngularVelocity
+     */
+    Body.prototype.updateAngularVelocity = function updateAngularVelocity() {
+        this.angularVelocity.set(this.inverseInertia.vectorMultiply(this.angularMomentum));
+    };
+
+    /**
+     * Determine world coordinates from the local coordinate system. Useful
+     * if the Body has rotated in space.
+     *
+     * @method toWorldCoordinates
+     * @param localPosition {Vector} local coordinate vector
+     * @return global coordinate vector {Vector}
+     */
+    Body.prototype.toWorldCoordinates = function toWorldCoordinates(localPosition) {
+        return this.pWorld.set(this.orientation.rotateVector(localPosition));
+    };
+
+    /**
+     * Calculates the kinetic and intertial energy of a body.
+     *
+     * @method getEnergy
+     * @return energy {Number}
+     */
+    Body.prototype.getEnergy = function getEnergy() {
+        return Particle.prototype.getEnergy.call(this)
+            + 0.5 * this.inertia.vectorMultiply(this.angularVelocity).dot(this.angularVelocity);
+    };
+
+    /**
+     * Extends Particle.reset to reset orientation, angular velocity
+     * and angular momentum.
+     *
+     * @method reset
+     * @param [p] {Array|Vector} position
+     * @param [v] {Array|Vector} velocity
+     * @param [q] {Array|Quaternion} orientation
+     * @param [L] {Array|Vector} angular momentum
+     */
+    Body.prototype.reset = function reset(p, v, q, L) {
+        Particle.prototype.reset.call(this, p, v);
+        this.angularVelocity.clear();
+        this.setOrientation(q || [1,0,0,0]);
+        this.setAngularMomentum(L || [0,0,0]);
+    };
+
+    /**
+     * Setter for orientation
+     *
+     * @method setOrientation
+     * @param q {Array|Quaternion} orientation
+     */
+    Body.prototype.setOrientation = function setOrientation(q) {
+        this.orientation.set(q);
+    };
+
+    /**
+     * Setter for angular velocity
+     *
+     * @method setAngularVelocity
+     * @param w {Array|Vector} angular velocity
+     */
+    Body.prototype.setAngularVelocity = function setAngularVelocity(w) {
+        this.wake();
+        this.angularVelocity.set(w);
+    };
+
+    /**
+     * Setter for angular momentum
+     *
+     * @method setAngularMomentum
+     * @param L {Array|Vector} angular momentum
+     */
+    Body.prototype.setAngularMomentum = function setAngularMomentum(L) {
+        this.wake();
+        this.angularMomentum.set(L);
+    };
+
+    /**
+     * Extends Particle.applyForce with an optional argument
+     * to apply the force at an off-centered location, resulting in a torque.
+     *
+     * @method applyForce
+     * @param force {Vector} force
+     * @param [location] {Vector} off-center location on the body
+     */
+    Body.prototype.applyForce = function applyForce(force, location) {
+        Particle.prototype.applyForce.call(this, force);
+        if (location !== undefined) this.applyTorque(location.cross(force));
+    };
+
+    /**
+     * Applied a torque force to a body, inducing a rotation.
+     *
+     * @method applyTorque
+     * @param torque {Vector} torque
+     */
+    Body.prototype.applyTorque = function applyTorque(torque) {
+        this.wake();
+        this.torque.set(this.torque.add(torque));
+    };
+
+    /**
+     * Extends Particle.getTransform to include a rotational component
+     * derived from the particle's orientation.
+     *
+     * @method getTransform
+     * @return transform {Transform}
+     */
+    Body.prototype.getTransform = function getTransform() {
+        return Transform.thenMove(
+            this.orientation.getTransform(),
+            Transform.getTranslate(Particle.prototype.getTransform.call(this))
+        );
+    };
+
+    /**
+     * Extends Particle._integrate to also update the rotational states
+     * of the body.
+     *
+     * @method getTransform
+     * @protected
+     * @param dt {Number} delta time
+     */
+    Body.prototype._integrate = function _integrate(dt) {
+        Particle.prototype._integrate.call(this, dt);
+        this.integrateAngularMomentum(dt);
+        this.updateAngularVelocity(dt);
+        this.integrateOrientation(dt);
+    };
+
+    /**
+     * Updates the angular momentum via the its integrator.
+     *
+     * @method integrateAngularMomentum
+     * @param dt {Number} delta time
+     */
+    Body.prototype.integrateAngularMomentum = function integrateAngularMomentum(dt) {
+        Body.INTEGRATOR.integrateAngularMomentum(this, dt);
+    };
+
+    /**
+     * Updates the orientation via the its integrator.
+     *
+     * @method integrateOrientation
+     * @param dt {Number} delta time
+     */
+    Body.prototype.integrateOrientation = function integrateOrientation(dt) {
+        Body.INTEGRATOR.integrateOrientation(this, dt);
+    };
+
+    module.exports = Body;
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: david@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+define('famous/physics/bodies/Circle',['require','exports','module','./Body','famous/math/Matrix'],function(require, exports, module) {
+    var Body = require('./Body');
+    var Matrix = require('famous/math/Matrix');
+
+    /**
+     * Implements a circle, or spherical, geometry for an Body with
+     * radius.
+     *
+     * @class Circle
+     * @extends Body
+     * @constructor
+     */
+    function Circle(options) {
+        options = options || {};
+        this.setRadius(options.radius || 0);
+        Body.call(this, options);
+    }
+
+    Circle.prototype = Object.create(Body.prototype);
+    Circle.prototype.constructor = Circle;
+
+    /**
+     * Basic setter for radius.
+     * @method setRadius
+     * @param r {Number} radius
+     */
+    Circle.prototype.setRadius = function setRadius(r) {
+        this.radius = r;
+        this.size = [2*this.radius, 2*this.radius];
+        this.setMomentsOfInertia();
+    };
+
+    Circle.prototype.setMomentsOfInertia = function setMomentsOfInertia() {
+        var m = this.mass;
+        var r = this.radius;
+
+        this.inertia = new Matrix([
+            [0.25 * m * r * r, 0, 0],
+            [0, 0.25 * m * r * r, 0],
+            [0, 0, 0.5 * m * r * r]
+        ]);
+
+        this.inverseInertia = new Matrix([
+            [4 / (m * r * r), 0, 0],
+            [0, 4 / (m * r * r), 0],
+            [0, 0, 2 / (m * r * r)]
+        ]);
+    };
+
+    module.exports = Circle;
+
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: david@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+define('famous/physics/bodies/Rectangle',['require','exports','module','./Body','famous/math/Matrix'],function(require, exports, module) {
+    var Body = require('./Body');
+    var Matrix = require('famous/math/Matrix');
+
+    /**
+     * Implements a rectangular geometry for an Body with
+     * size = [width, height].
+     *
+     * @class Rectangle
+     * @extends Body
+     * @constructor
+     */
+    function Rectangle(options) {
+        options = options || {};
+        this.size = options.size || [0,0];
+        Body.call(this, options);
+    }
+
+    Rectangle.prototype = Object.create(Body.prototype);
+    Rectangle.prototype.constructor = Rectangle;
+
+    /**
+     * Basic setter for size.
+     * @method setSize
+     * @param size {Array} size = [width, height]
+     */
+    Rectangle.prototype.setSize = function setSize(size) {
+        this.size = size;
+        this.setMomentsOfInertia();
+    };
+
+    Rectangle.prototype.setMomentsOfInertia = function setMomentsOfInertia() {
+        var m = this.mass;
+        var w = this.size[0];
+        var h = this.size[1];
+
+        this.inertia = new Matrix([
+            [m * h * h / 12, 0, 0],
+            [0, m * w * w / 12, 0],
+            [0, 0, m * (w * w + h * h) / 12]
+        ]);
+
+        this.inverseInertia = new Matrix([
+            [12 / (m * h * h), 0, 0],
+            [0, 12 / (m * w * w), 0],
+            [0, 0, 12 / (m * (w * w + h * h))]
+        ]);
+    };
+
+    module.exports = Rectangle;
+
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: david@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
 define('famous/physics/constraints/Constraint',['require','exports','module','famous/core/EventHandler'],function(require, exports, module) {
     var EventHandler = require('famous/core/EventHandler');
 
@@ -9897,6 +9912,454 @@ define('famous/physics/constraints/Constraint',['require','exports','module','fa
     };
 
     module.exports = Constraint;
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: david@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+define('famous/physics/constraints/Collision',['require','exports','module','./Constraint','famous/math/Vector'],function(require, exports, module) {
+    var Constraint = require('./Constraint');
+    var Vector = require('famous/math/Vector');
+
+    /**
+     *  Allows for two circular bodies to collide and bounce off each other.
+     *
+     *  @class Collision
+     *  @constructor
+     *  @extends Constraint
+     *  @param {Options} [options] An object of configurable options.
+     *  @param {Number} [options.restitution] The energy ratio lost in a collision (0 = stick, 1 = elastic) Range : [0, 1]
+     *  @param {Number} [options.drift] Baumgarte stabilization parameter. Makes constraints "loosely" (0) or "tightly" (1) enforced. Range : [0, 1]
+     *  @param {Number} [options.slop] Amount of penetration in pixels to ignore before collision event triggers
+     *
+     */
+    function Collision(options) {
+        this.options = Object.create(Collision.DEFAULT_OPTIONS);
+        if (options) this.setOptions(options);
+
+        //registers
+        this.normal   = new Vector();
+        this.pDiff    = new Vector();
+        this.vDiff    = new Vector();
+        this.impulse1 = new Vector();
+        this.impulse2 = new Vector();
+
+        Constraint.call(this);
+    }
+
+    Collision.prototype = Object.create(Constraint.prototype);
+    Collision.prototype.constructor = Collision;
+
+    Collision.DEFAULT_OPTIONS = {
+        restitution : 0.5,
+        drift : 0.5,
+        slop : 0
+    };
+
+    function _normalVelocity(particle1, particle2) {
+        return particle1.velocity.dot(particle2.velocity);
+    }
+
+    /*
+     * Setter for options.
+     *
+     * @method setOptions
+     * @param options {Objects}
+     */
+    Collision.prototype.setOptions = function setOptions(options) {
+        for (var key in options) this.options[key] = options[key];
+    };
+
+    /**
+     * Adds an impulse to a physics body's velocity due to the constraint
+     *
+     * @method applyConstraint
+     * @param targets {Array.Body}  Array of bodies to apply the constraint to
+     * @param source {Body}         The source of the constraint
+     * @param dt {Number}           Delta time
+     */
+    Collision.prototype.applyConstraint = function applyConstraint(targets, source, dt) {
+        if (source === undefined) return;
+
+        var v1 = source.velocity;
+        var p1 = source.position;
+        var w1 = source.inverseMass;
+        var r1 = source.radius;
+
+        var options = this.options;
+        var drift = options.drift;
+        var slop = -options.slop;
+        var restitution = options.restitution;
+
+        var n     = this.normal;
+        var pDiff = this.pDiff;
+        var vDiff = this.vDiff;
+        var impulse1 = this.impulse1;
+        var impulse2 = this.impulse2;
+
+        for (var i = 0; i < targets.length; i++) {
+            var target = targets[i];
+
+            if (target === source) continue;
+
+            var v2 = target.velocity;
+            var p2 = target.position;
+            var w2 = target.inverseMass;
+            var r2 = target.radius;
+
+            pDiff.set(p2.sub(p1));
+            vDiff.set(v2.sub(v1));
+
+            var dist    = pDiff.norm();
+            var overlap = dist - (r1 + r2);
+            var effMass = 1/(w1 + w2);
+            var gamma   = 0;
+
+            if (overlap < 0) {
+
+                n.set(pDiff.normalize());
+
+                if (this._eventOutput) {
+                    var collisionData = {
+                        target  : target,
+                        source  : source,
+                        overlap : overlap,
+                        normal  : n
+                    };
+
+                    this._eventOutput.emit('preCollision', collisionData);
+                    this._eventOutput.emit('collision', collisionData);
+                }
+
+                var lambda = (overlap <= slop)
+                    ? ((1 + restitution) * n.dot(vDiff) + drift/dt * (overlap - slop)) / (gamma + dt/effMass)
+                    : ((1 + restitution) * n.dot(vDiff)) / (gamma + dt/effMass);
+
+                n.mult(dt*lambda).put(impulse1);
+                impulse1.mult(-1).put(impulse2);
+
+                source.applyImpulse(impulse1);
+                target.applyImpulse(impulse2);
+
+                //source.setPosition(p1.add(n.mult(overlap/2)));
+                //target.setPosition(p2.sub(n.mult(overlap/2)));
+
+                if (this._eventOutput) this._eventOutput.emit('postCollision', collisionData);
+
+            }
+        }
+    };
+
+    module.exports = Collision;
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: david@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+define('famous/physics/constraints/Curve',['require','exports','module','./Constraint','famous/math/Vector'],function(require, exports, module) {
+    var Constraint = require('./Constraint');
+    var Vector = require('famous/math/Vector');
+
+    /**
+     *  A constraint that keeps a physics body on a given implicit curve
+     *    regardless of other physical forces are applied to it.
+     *
+     *    A curve constraint is two surface constraints in disguise, as a curve is
+     *    the intersection of two surfaces, and is essentially constrained to both
+     *
+     *  @class Curve
+     *  @constructor
+     *  @extends Constraint
+     *  @param {Options} [options] An object of configurable options.
+     *  @param {Function} [options.equation] An implicitly defined surface f(x,y,z) = 0 that body is constrained to e.g. function(x,y,z) { x*x + y*y - r*r } corresponds to a circle of radius r pixels
+     *  @param {Function} [options.plane] An implicitly defined second surface that the body is constrained to
+     *  @param {Number} [options.period] The spring-like reaction when the constraint is violated
+     *  @param {Number} [options.number] The damping-like reaction when the constraint is violated
+     */
+    function Curve(options) {
+        this.options = Object.create(Curve.DEFAULT_OPTIONS);
+        if (options) this.setOptions(options);
+
+        //registers
+        this.J = new Vector();
+        this.impulse = new Vector();
+
+        Constraint.call(this);
+    }
+
+    Curve.prototype = Object.create(Constraint.prototype);
+    Curve.prototype.constructor = Curve;
+
+    /** @const */ var epsilon = 1e-7;
+    /** @const */ var pi = Math.PI;
+
+    Curve.DEFAULT_OPTIONS = {
+        equation  : function(x,y,z) {
+            return 0;
+        },
+        plane : function(x,y,z) {
+            return z;
+        },
+        period : 0,
+        dampingRatio : 0
+    };
+
+    /**
+     * Basic options setter
+     *
+     * @method setOptions
+     * @param options {Objects}
+     */
+    Curve.prototype.setOptions = function setOptions(options) {
+        for (var key in options) this.options[key] = options[key];
+    };
+
+    /**
+     * Adds a curve impulse to a physics body.
+     *
+     * @method applyConstraint
+     * @param targets {Array.Body} Array of bodies to apply force to.
+     * @param source {Body} Not applicable
+     * @param dt {Number} Delta time
+     */
+    Curve.prototype.applyConstraint = function applyConstraint(targets, source, dt) {
+        var options = this.options;
+        var impulse = this.impulse;
+        var J = this.J;
+
+        var f = options.equation;
+        var g = options.plane;
+        var dampingRatio = options.dampingRatio;
+        var period = options.period;
+
+        for (var i = 0; i < targets.length; i++) {
+            var body = targets[i];
+
+            var v = body.velocity;
+            var p = body.position;
+            var m = body.mass;
+
+            var gamma;
+            var beta;
+
+            if (period === 0) {
+                gamma = 0;
+                beta = 1;
+            }
+            else {
+                var c = 4 * m * pi * dampingRatio / period;
+                var k = 4 * m * pi * pi / (period * period);
+
+                gamma = 1 / (c + dt*k);
+                beta  = dt*k / (c + dt*k);
+            }
+
+            var x = p.x;
+            var y = p.y;
+            var z = p.z;
+
+            var f0  = f(x, y, z);
+            var dfx = (f(x + epsilon, p, p) - f0) / epsilon;
+            var dfy = (f(x, y + epsilon, p) - f0) / epsilon;
+            var dfz = (f(x, y, p + epsilon) - f0) / epsilon;
+
+            var g0  = g(x, y, z);
+            var dgx = (g(x + epsilon, y, z) - g0) / epsilon;
+            var dgy = (g(x, y + epsilon, z) - g0) / epsilon;
+            var dgz = (g(x, y, z + epsilon) - g0) / epsilon;
+
+            J.setXYZ(dfx + dgx, dfy + dgy, dfz + dgz);
+
+            var antiDrift = beta/dt * (f0 + g0);
+            var lambda = -(J.dot(v) + antiDrift) / (gamma + dt * J.normSquared() / m);
+
+            impulse.set(J.mult(dt*lambda));
+            body.applyImpulse(impulse);
+        }
+    };
+
+    module.exports = Curve;
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: david@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+define('famous/physics/constraints/Distance',['require','exports','module','./Constraint','famous/math/Vector'],function(require, exports, module) {
+    var Constraint = require('./Constraint');
+    var Vector = require('famous/math/Vector');
+
+    /**
+     *  A constraint that keeps a physics body a given distance away from a given
+     *  anchor, or another attached body.
+     *
+     *
+     *  @class Distance
+     *  @constructor
+     *  @extends Constraint
+     *  @param {Options} [options] An object of configurable options.
+     *  @param {Array} [options.anchor] The location of the anchor
+     *  @param {Number} [options.length] The amount of distance from the anchor the constraint should enforce
+     *  @param {Number} [options.minLength] The minimum distance before the constraint is activated. Use this property for a "rope" effect.
+     *  @param {Number} [options.period] The spring-like reaction when the constraint is broken.
+     *  @param {Number} [options.dampingRatio] The damping-like reaction when the constraint is broken.
+     *
+     */
+    function Distance(options) {
+        this.options = Object.create(this.constructor.DEFAULT_OPTIONS);
+        if (options) this.setOptions(options);
+
+        //registers
+        this.impulse  = new Vector();
+        this.normal   = new Vector();
+        this.diffP    = new Vector();
+        this.diffV    = new Vector();
+
+        Constraint.call(this);
+    }
+
+    Distance.prototype = Object.create(Constraint.prototype);
+    Distance.prototype.constructor = Distance;
+
+    Distance.DEFAULT_OPTIONS = {
+        anchor : null,
+        length : 0,
+        minLength : 0,
+        period : 0,
+        dampingRatio : 0
+    };
+
+    /** @const */ var pi = Math.PI;
+
+    /**
+     * Basic options setter
+     *
+     * @method setOptions
+     * @param options {Objects}
+     */
+    Distance.prototype.setOptions = function setOptions(options) {
+        if (options.anchor) {
+            if (options.anchor.position instanceof Vector) this.options.anchor = options.anchor.position;
+            if (options.anchor   instanceof Vector)  this.options.anchor = options.anchor;
+            if (options.anchor   instanceof Array)  this.options.anchor = new Vector(options.anchor);
+        }
+        if (options.length !== undefined) this.options.length = options.length;
+        if (options.dampingRatio !== undefined) this.options.dampingRatio = options.dampingRatio;
+        if (options.period !== undefined) this.options.period = options.period;
+        if (options.minLength !== undefined) this.options.minLength = options.minLength;
+    };
+
+    function _calcError(impulse, body) {
+        return body.mass * impulse.norm();
+    }
+
+    /**
+     * Set the anchor position
+     *
+     * @method setOptions
+     * @param anchor {Array}
+     */
+    Distance.prototype.setAnchor = function setAnchor(anchor) {
+        if (!this.options.anchor) this.options.anchor = new Vector();
+        this.options.anchor.set(anchor);
+    };
+
+    /**
+     * Adds an impulse to a physics body's velocity due to the constraint
+     *
+     * @method applyConstraint
+     * @param targets {Array.Body}  Array of bodies to apply the constraint to
+     * @param source {Body}         The source of the constraint
+     * @param dt {Number}           Delta time
+     */
+    Distance.prototype.applyConstraint = function applyConstraint(targets, source, dt) {
+        var n        = this.normal;
+        var diffP    = this.diffP;
+        var diffV    = this.diffV;
+        var impulse  = this.impulse;
+        var options  = this.options;
+
+        var dampingRatio = options.dampingRatio;
+        var period       = options.period;
+        var minLength    = options.minLength;
+
+        var p2;
+        var w2;
+
+        if (source) {
+            var v2 = source.velocity;
+            p2 = source.position;
+            w2 = source.inverseMass;
+        }
+        else {
+            p2 = this.options.anchor;
+            w2 = 0;
+        }
+
+        var length = this.options.length;
+
+        for (var i = 0; i < targets.length; i++) {
+            var body = targets[i];
+
+            var v1 = body.velocity;
+            var p1 = body.position;
+            var w1 = body.inverseMass;
+
+            diffP.set(p1.sub(p2));
+            n.set(diffP.normalize());
+
+            var dist = diffP.norm() - length;
+
+            //rope effect
+            if (Math.abs(dist) < minLength) return;
+
+            if (source) diffV.set(v1.sub(v2));
+            else diffV.set(v1);
+
+            var effMass = 1 / (w1 + w2);
+            var gamma;
+            var beta;
+
+            if (period === 0) {
+                gamma = 0;
+                beta  = 1;
+            }
+            else {
+                var c = 4 * effMass * pi * dampingRatio / period;
+                var k = 4 * effMass * pi * pi / (period * period);
+
+                gamma = 1 / (c + dt*k);
+                beta  = dt*k / (c + dt*k);
+            }
+
+            var antiDrift = beta/dt * dist;
+            var lambda    = -(n.dot(diffV) + antiDrift) / (gamma + dt/effMass);
+
+            impulse.set(n.mult(dt*lambda));
+            body.applyImpulse(impulse);
+
+            if (source) source.applyImpulse(impulse.mult(-1));
+        }
+    };
+
+    module.exports = Distance;
 
 
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -10097,264 +10560,541 @@ define('famous/physics/constraints/Snap',['require','exports','module','./Constr
  * @copyright Famous Industries, Inc. 2014
  */
 
-define('famous/transitions/SnapTransition',['require','exports','module','famous/physics/PhysicsEngine','famous/physics/bodies/Particle','famous/physics/constraints/Snap','famous/math/Vector'],function(require, exports, module) {
-    var PE = require('famous/physics/PhysicsEngine');
-    var Particle = require('famous/physics/bodies/Particle');
-    var Spring = require('famous/physics/constraints/Snap');
+define('famous/physics/constraints/Surface',['require','exports','module','./Constraint','famous/math/Vector'],function(require, exports, module) {
+    var Constraint = require('./Constraint');
     var Vector = require('famous/math/Vector');
 
     /**
-     * SnapTransition is a method of transitioning between two values (numbers,
-     * or arrays of numbers). It is similar to SpringTransition except
-     * the transition can be much faster and always has a damping effect.
+     *  A constraint that keeps a physics body on a given implicit surface
+     *    regardless of other physical forces are applied to it.
      *
-     * @class SnapTransition
-     * @constructor
-     *
-     * @param [state=0] {Number|Array} Initial state
+     *  @class Surface
+     *  @constructor
+     *  @extends Constraint
+     *  @param {Options} [options] An object of configurable options.
+     *  @param {Function} [options.equation] An implicitly defined surface f(x,y,z) = 0 that body is constrained to e.g. function(x,y,z) { x*x + y*y + z*z - r*r } corresponds to a sphere of radius r pixels.
+     *  @param {Number} [options.period] The spring-like reaction when the constraint is violated.
+     *  @param {Number} [options.dampingRatio] The damping-like reaction when the constraint is violated.
      */
-    function SnapTransition(state) {
-        state = state || 0;
+    function Surface(options) {
+        this.options = Object.create(Surface.DEFAULT_OPTIONS);
+        if (options) this.setOptions(options);
 
-        this.endState  = new Vector(state);
-        this.initState = new Vector();
+        this.J = new Vector();
+        this.impulse  = new Vector();
 
-        this._dimensions       = 1;
-        this._restTolerance    = 1e-10;
-        this._absRestTolerance = this._restTolerance;
-        this._callback         = undefined;
-
-        this.PE       = new PE();
-        this.particle = new Particle();
-        this.spring   = new Spring({anchor : this.endState});
-
-        this.PE.addBody(this.particle);
-        this.PE.attach(this.spring, this.particle);
+        Constraint.call(this);
     }
 
-    SnapTransition.SUPPORTS_MULTIPLE = 3;
+    Surface.prototype = Object.create(Constraint.prototype);
+    Surface.prototype.constructor = Surface;
+
+    Surface.DEFAULT_OPTIONS = {
+        equation : undefined,
+        period : 0,
+        dampingRatio : 0
+    };
+
+    /** @const */ var epsilon = 1e-7;
+    /** @const */ var pi = Math.PI;
 
     /**
-     * @property SnapTransition.DEFAULT_OPTIONS
+     * Basic options setter
+     *
+     * @method setOptions
+     * @param options {Objects}
+     */
+    Surface.prototype.setOptions = function setOptions(options) {
+        for (var key in options) this.options[key] = options[key];
+    };
+
+    /**
+     * Adds a surface impulse to a physics body.
+     *
+     * @method applyConstraint
+     * @param targets {Array.Body} Array of bodies to apply force to.
+     * @param source {Body} Not applicable
+     * @param dt {Number} Delta time
+     */
+    Surface.prototype.applyConstraint = function applyConstraint(targets, source, dt) {
+        var impulse = this.impulse;
+        var J       = this.J;
+        var options = this.options;
+
+        var f = options.equation;
+        var dampingRatio = options.dampingRatio;
+        var period = options.period;
+
+        for (var i = 0; i < targets.length; i++) {
+            var particle = targets[i];
+
+            var v = particle.velocity;
+            var p = particle.position;
+            var m = particle.mass;
+
+            var gamma;
+            var beta;
+
+            if (period === 0) {
+                gamma = 0;
+                beta = 1;
+            }
+            else {
+                var c = 4 * m * pi * dampingRatio / period;
+                var k = 4 * m * pi * pi / (period * period);
+
+                gamma = 1 / (c + dt*k);
+                beta  = dt*k / (c + dt*k);
+            }
+
+            var x = p.x;
+            var y = p.y;
+            var z = p.z;
+
+            var f0  = f(x, y, z);
+            var dfx = (f(x + epsilon, p, p) - f0) / epsilon;
+            var dfy = (f(x, y + epsilon, p) - f0) / epsilon;
+            var dfz = (f(x, y, p + epsilon) - f0) / epsilon;
+            J.setXYZ(dfx, dfy, dfz);
+
+            var antiDrift = beta/dt * f0;
+            var lambda = -(J.dot(v) + antiDrift) / (gamma + dt * J.normSquared() / m);
+
+            impulse.set(J.mult(dt*lambda));
+            particle.applyImpulse(impulse);
+        }
+    };
+
+    module.exports = Surface;
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: david@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+define('famous/physics/constraints/Wall',['require','exports','module','./Constraint','famous/math/Vector'],function(require, exports, module) {
+    var Constraint = require('./Constraint');
+    var Vector = require('famous/math/Vector');
+
+    /**
+     *  A wall describes an infinite two-dimensional plane that physics bodies
+     *    can collide with. To define a wall, you must give it a distance (from
+     *    the center of the physics engine's origin, and a normal defining the plane
+     *    of the wall.
+     *
+     *    (wall)
+     *      |
+     *      | (normal)     (origin)
+     *      | --->            *
+     *      |
+     *      |    (distance)
+     *      ...................
+     *            (100px)
+     *
+     *      e.g., Wall({normal : [1,0,0], distance : 100})
+     *      would be a wall 100 pixels to the left, whose normal points right
+     *
+     *  @class Wall
+     *  @constructor
+     *  @extends Constraint
+     *  @param {Options} [options] An object of configurable options.
+     *  @param {Number} [options.restitution] The energy ratio lost in a collision (0 = stick, 1 = elastic). Range : [0, 1]
+     *  @param {Number} [options.drift] Baumgarte stabilization parameter. Makes constraints "loosely" (0) or "tightly" (1) enforced. Range : [0, 1]
+     *  @param {Number} [options.slop] Amount of penetration in pixels to ignore before collision event triggers.
+     *  @param {Array} [options.normal] The normal direction to the wall.
+     *  @param {Number} [options.distance] The distance from the origin that the wall is placed.
+     *  @param {onContact} [options.onContact] How to handle collision against the wall.
+     *
+     */
+    function Wall(options) {
+        this.options = Object.create(Wall.DEFAULT_OPTIONS);
+        if (options) this.setOptions(options);
+
+        //registers
+        this.diff = new Vector();
+        this.impulse = new Vector();
+
+        Constraint.call(this);
+    }
+
+    Wall.prototype = Object.create(Constraint.prototype);
+    Wall.prototype.constructor = Wall;
+
+    /**
+     * @property Wall.ON_CONTACT
      * @type Object
      * @protected
      * @static
      */
-    SnapTransition.DEFAULT_OPTIONS = {
+    Wall.ON_CONTACT = {
 
         /**
-         * The amount of time in milliseconds taken for one complete oscillation
-         * when there is no damping
-         *    Range : [0, Infinity]
-         *
-         * @attribute period
-         * @type Number
-         * @default 100
+         * Physical bodies bounce off the wall
+         * @attribute REFLECT
          */
-        period : 100,
+        REFLECT : 0,
 
         /**
-         * The damping of the snap.
-         *    Range : [0, 1]
-         *
-         * @attribute dampingRatio
-         * @type Number
-         * @default 0.2
+         * Physical bodies are unaffected. Usecase is to fire events on contact.
+         * @attribute SILENT
          */
-        dampingRatio : 0.2,
-
-        /**
-         * The initial velocity of the transition.
-         *
-         * @attribute velocity
-         * @type Number|Array
-         * @default 0
-         */
-        velocity : 0
+        SILENT : 1
     };
 
-    function _getEnergy() {
-        return this.particle.getEnergy() + this.spring.getEnergy(this.particle);
+    Wall.DEFAULT_OPTIONS = {
+        restitution : 0.5,
+        drift : 0.5,
+        slop : 0,
+        normal : [1, 0, 0],
+        distance : 0,
+        onContact : Wall.ON_CONTACT.REFLECT
+    };
+
+    /*
+     * Setter for options.
+     *
+     * @method setOptions
+     * @param options {Objects}
+     */
+    Wall.prototype.setOptions = function setOptions(options) {
+        if (options.normal !== undefined) {
+            if (options.normal instanceof Vector) this.options.normal = options.normal.clone();
+            if (options.normal instanceof Array)  this.options.normal = new Vector(options.normal);
+        }
+        if (options.restitution !== undefined) this.options.restitution = options.restitution;
+        if (options.drift !== undefined) this.options.drift = options.drift;
+        if (options.slop !== undefined) this.options.slop = options.slop;
+        if (options.distance !== undefined) this.options.distance = options.distance;
+        if (options.onContact !== undefined) this.options.onContact = options.onContact;
+    };
+
+    function _getNormalVelocity(n, v) {
+        return v.dot(n);
     }
 
-    function _setAbsoluteRestTolerance() {
-        var distance = this.endState.sub(this.initState).normSquared();
-        this._absRestTolerance = (distance === 0)
-            ? this._restTolerance
-            : this._restTolerance * distance;
+    function _getDistanceFromOrigin(p) {
+        var n = this.options.normal;
+        var d = this.options.distance;
+        return p.dot(n) + d;
     }
 
-    function _setTarget(target) {
-        this.endState.set(target);
-        _setAbsoluteRestTolerance.call(this);
+    function _onEnter(particle, overlap, dt) {
+        var p = particle.position;
+        var v = particle.velocity;
+        var m = particle.mass;
+        var n = this.options.normal;
+        var action = this.options.onContact;
+        var restitution = this.options.restitution;
+        var impulse = this.impulse;
+
+        var drift = this.options.drift;
+        var slop = -this.options.slop;
+        var gamma = 0;
+
+        if (this._eventOutput) {
+            var data = {particle : particle, wall : this, overlap : overlap, normal : n};
+            this._eventOutput.emit('preCollision', data);
+            this._eventOutput.emit('collision', data);
+        }
+
+        switch (action) {
+            case Wall.ON_CONTACT.REFLECT:
+                var lambda = (overlap < slop)
+                    ? -((1 + restitution) * n.dot(v) + drift / dt * (overlap - slop)) / (m * dt + gamma)
+                    : -((1 + restitution) * n.dot(v)) / (m * dt + gamma);
+
+                impulse.set(n.mult(dt * lambda));
+                particle.applyImpulse(impulse);
+                particle.setPosition(p.add(n.mult(-overlap)));
+                break;
+        }
+
+        if (this._eventOutput) this._eventOutput.emit('postCollision', data);
     }
 
-    function _wake() {
-        this.PE.wake();
+    function _onExit(particle, overlap, dt) {
+        var action = this.options.onContact;
+        var p = particle.position;
+        var n = this.options.normal;
+
+        if (action === Wall.ON_CONTACT.REFLECT) {
+            particle.setPosition(p.add(n.mult(-overlap)));
+        }
     }
 
-    function _sleep() {
-        this.PE.sleep();
+    /**
+     * Adds an impulse to a physics body's velocity due to the wall constraint
+     *
+     * @method applyConstraint
+     * @param targets {Array.Body}  Array of bodies to apply the constraint to
+     * @param source {Body}         The source of the constraint
+     * @param dt {Number}           Delta time
+     */
+    Wall.prototype.applyConstraint = function applyConstraint(targets, source, dt) {
+        var n = this.options.normal;
+
+        for (var i = 0; i < targets.length; i++) {
+            var particle = targets[i];
+            var p = particle.position;
+            var v = particle.velocity;
+            var r = particle.radius || 0;
+
+            var overlap = _getDistanceFromOrigin.call(this, p.add(n.mult(-r)));
+            var nv = _getNormalVelocity.call(this, n, v);
+
+            if (overlap <= 0) {
+                if (nv < 0) _onEnter.call(this, particle, overlap, dt);
+                else _onExit.call(this, particle, overlap, dt);
+            }
+        }
+    };
+
+    module.exports = Wall;
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: david@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+define('famous/physics/constraints/Walls',['require','exports','module','./Constraint','./Wall','famous/math/Vector'],function(require, exports, module) {
+    var Constraint = require('./Constraint');
+    var Wall = require('./Wall');
+    var Vector = require('famous/math/Vector');
+
+    /**
+     *  Walls combines one or more Wall primitives and exposes a simple API to
+     *  interact with several walls at once. A common use case would be to set up
+     *  a bounding box for a physics body, that would collide with each side.
+     *
+     *  @class Walls
+     *  @constructor
+     *  @extends Constraint
+     *  @uses Wall
+     *  @param {Options} [options] An object of configurable options.
+     *  @param {Array} [options.sides] An array of sides e.g., [Walls.LEFT, Walls.TOP]
+     *  @param {Array} [options.size] The size of the bounding box of the walls.
+     *  @param {Array} [options.origin] The center of the wall relative to the size.
+     *  @param {Array} [options.drift] Baumgarte stabilization parameter. Makes constraints "loosely" (0) or "tightly" (1) enforced. Range : [0, 1]
+     *  @param {Array} [options.slop] Amount of penetration in pixels to ignore before collision event triggers.
+     *  @param {Array} [options.restitution] The energy ratio lost in a collision (0 = stick, 1 = elastic) The energy ratio lost in a collision (0 = stick, 1 = elastic)
+     *  @param {Array} [options.onContact] How to handle collision against the wall.
+     */
+    function Walls(options) {
+        this.options = Object.create(Walls.DEFAULT_OPTIONS);
+        if (options) this.setOptions(options);
+        _createComponents.call(this, options.sides || this.options.sides);
+
+        Constraint.call(this);
     }
 
-    function _setParticlePosition(p) {
-        this.particle.position.set(p);
+    Walls.prototype = Object.create(Constraint.prototype);
+    Walls.prototype.constructor = Walls;
+    /**
+     * @property Walls.ON_CONTACT
+     * @type Object
+     * @extends Wall.ON_CONTACT
+     * @static
+     */
+    Walls.ON_CONTACT = Wall.ON_CONTACT;
+
+    /**
+     * An enumeration of common types of walls
+     *    LEFT, RIGHT, TOP, BOTTOM, FRONT, BACK
+     *    TWO_DIMENSIONAL, THREE_DIMENSIONAL
+     *
+     * @property Walls.SIDES
+     * @type Object
+     * @final
+     * @static
+     */
+    Walls.SIDES = {
+        LEFT   : 0,
+        RIGHT  : 1,
+        TOP    : 2,
+        BOTTOM : 3,
+        FRONT  : 4,
+        BACK   : 5,
+        TWO_DIMENSIONAL : [0, 1, 2, 3],
+        THREE_DIMENSIONAL : [0, 1, 2, 3, 4, 5]
+    };
+
+    Walls.DEFAULT_OPTIONS = {
+        sides : Walls.SIDES.TWO_DIMENSIONAL,
+        size : [window.innerWidth, window.innerHeight, 0],
+        origin : [.5, .5, .5],
+        drift : 0.5,
+        slop : 0,
+        restitution : 0.5,
+        onContact : Walls.ON_CONTACT.REFLECT
+    };
+
+    var _SIDE_NORMALS = {
+        0 : new Vector(1, 0, 0),
+        1 : new Vector(-1, 0, 0),
+        2 : new Vector(0, 1, 0),
+        3 : new Vector(0,-1, 0),
+        4 : new Vector(0, 0, 1),
+        5 : new Vector(0, 0,-1)
+    };
+
+    function _getDistance(side, size, origin) {
+        var distance;
+        var SIDES = Walls.SIDES;
+        switch (parseInt(side)) {
+            case SIDES.LEFT:
+                distance = size[0] * origin[0];
+                break;
+            case SIDES.TOP:
+                distance = size[1] * origin[1];
+                break;
+            case SIDES.FRONT:
+                distance = size[2] * origin[2];
+                break;
+            case SIDES.RIGHT:
+                distance = size[0] * (1 - origin[0]);
+                break;
+            case SIDES.BOTTOM:
+                distance = size[1] * (1 - origin[1]);
+                break;
+            case SIDES.BACK:
+                distance = size[2] * (1 - origin[2]);
+                break;
+        }
+        return distance;
     }
 
-    function _setParticleVelocity(v) {
-        this.particle.velocity.set(v);
+    /*
+     * Setter for options.
+     *
+     * @method setOptions
+     * @param options {Objects}
+     */
+    Walls.prototype.setOptions = function setOptions(options) {
+        var resizeFlag = false;
+        if (options.restitution !== undefined) _setOptionsForEach.call(this, {restitution : options.restitution});
+        if (options.drift !== undefined) _setOptionsForEach.call(this, {drift : options.drift});
+        if (options.slop !== undefined) _setOptionsForEach.call(this, {slop : options.slop});
+        if (options.onContact !== undefined) _setOptionsForEach.call(this, {onContact : options.onContact});
+        if (options.size !== undefined) resizeFlag = true;
+        if (options.sides !== undefined) this.options.sides = options.sides;
+        if (options.origin !== undefined) resizeFlag = true;
+        if (resizeFlag) this.setSize(options.size, options.origin);
+    };
+
+    function _createComponents(sides) {
+        this.components = {};
+        var components = this.components;
+
+        for (var i = 0; i < sides.length; i++) {
+            var side = sides[i];
+            components[i] = new Wall({
+                normal   : _SIDE_NORMALS[side].clone(),
+                distance : _getDistance(side, this.options.size, this.options.origin)
+            });
+        }
     }
 
-    function _getParticlePosition() {
-        return (this._dimensions === 0)
-            ? this.particle.getPosition1D()
-            : this.particle.getPosition();
-    }
+    /*
+     * Setter for size.
+     *
+     * @method setOptions
+     * @param options {Objects}
+     */
+    Walls.prototype.setSize = function setSize(size, origin) {
+        origin = origin || this.options.origin;
+        if (origin.length < 3) origin[2] = 0.5;
 
-    function _getParticleVelocity() {
-        return (this._dimensions === 0)
-            ? this.particle.getVelocity1D()
-            : this.particle.getVelocity();
-    }
-
-    function _setCallback(callback) {
-        this._callback = callback;
-    }
-
-    function _setupDefinition(definition) {
-        var defaults = SnapTransition.DEFAULT_OPTIONS;
-        if (definition.period === undefined)       definition.period       = defaults.period;
-        if (definition.dampingRatio === undefined) definition.dampingRatio = defaults.dampingRatio;
-        if (definition.velocity === undefined)     definition.velocity     = defaults.velocity;
-
-        //setup spring
-        this.spring.setOptions({
-            period       : definition.period,
-            dampingRatio : definition.dampingRatio
+        this.forEach(function(wall, side) {
+            var d = _getDistance(side, size, origin);
+            wall.setOptions({distance : d});
         });
 
-        //setup particle
-        _setParticleVelocity.call(this, definition.velocity);
-    }
+        this.options.size   = size;
+        this.options.origin = origin;
+    };
 
-    function _update() {
-        if (this.PE.isSleeping()) {
-            if (this._callback) {
-                var cb = this._callback;
-                this._callback = undefined;
-                cb();
-            }
-            return;
-        }
-
-        if (_getEnergy.call(this) < this._absRestTolerance) {
-            _setParticlePosition.call(this, this.endState);
-            _setParticleVelocity.call(this, [0,0,0]);
-            _sleep.call(this);
-        }
+    function _setOptionsForEach(options) {
+        this.forEach(function(wall) {
+            wall.setOptions(options);
+        });
+        for (var key in options) this.options[key] = options[key];
     }
 
     /**
-     * Resets the state and velocity
+     * Adds an impulse to a physics body's velocity due to the walls constraint
      *
-     * @method reset
-     *
-     * @param state {Number|Array}      State
-     * @param [velocity] {Number|Array} Velocity
+     * @method applyConstraint
+     * @param targets {Array.Body}  Array of bodies to apply the constraint to
+     * @param source {Body}         The source of the constraint
+     * @param dt {Number}           Delta time
      */
-    SnapTransition.prototype.reset = function reset(state, velocity) {
-        this._dimensions = (state instanceof Array)
-            ? state.length
-            : 0;
-
-        this.initState.set(state);
-        _setParticlePosition.call(this, state);
-        _setTarget.call(this, state);
-        if (velocity) _setParticleVelocity.call(this, velocity);
-        _setCallback.call(this, undefined);
+    Walls.prototype.applyConstraint = function applyConstraint(targets, source, dt) {
+        this.forEach(function(wall) {
+            wall.applyConstraint(targets, source, dt);
+        });
     };
 
     /**
-     * Getter for velocity
+     * Apply a method to each wall making up the walls
      *
-     * @method getVelocity
-     *
-     * @return velocity {Number|Array}
+     * @method applyConstraint
+     * @param fn {Function}  Function that takes in a wall as its first parameter
      */
-    SnapTransition.prototype.getVelocity = function getVelocity() {
-        return _getParticleVelocity.call(this);
+    Walls.prototype.forEach = function forEach(fn) {
+        var sides = this.options.sides;
+        for (var key in this.sides) fn(sides[key], key);
     };
 
     /**
-     * Setter for velocity
+     * Rotates the walls by an angle in the XY-plane
      *
-     * @method setVelocity
-     *
-     * @return velocity {Number|Array}
+     * @method applyConstraint
+     * @param angle {Function}
      */
-    SnapTransition.prototype.setVelocity = function setVelocity(velocity) {
-        this.call(this, _setParticleVelocity(velocity));
+    Walls.prototype.rotateZ = function rotateZ(angle) {
+        this.forEach(function(wall) {
+            var n = wall.options.normal;
+            n.rotateZ(angle).put(n);
+        });
     };
 
     /**
-     * Detects whether a transition is in progress
+     * Rotates the walls by an angle in the YZ-plane
      *
-     * @method isActive
-     *
-     * @return {Boolean}
+     * @method applyConstraint
+     * @param angle {Function}
      */
-    SnapTransition.prototype.isActive = function isActive() {
-        return !this.PE.isSleeping();
+    Walls.prototype.rotateX = function rotateX(angle) {
+        this.forEach(function(wall) {
+            var n = wall.options.normal;
+            n.rotateX(angle).put(n);
+        });
     };
 
     /**
-     * Halt the transition
+     * Rotates the walls by an angle in the XZ-plane
      *
-     * @method halt
+     * @method applyConstraint
+     * @param angle {Function}
      */
-    SnapTransition.prototype.halt = function halt() {
-        this.set(this.get());
+    Walls.prototype.rotateY = function rotateY(angle) {
+        this.forEach(function(wall) {
+            var n = wall.options.normal;
+            n.rotateY(angle).put(n);
+        });
     };
 
-    /**
-     * Get the current position of the transition
-s     *
-     * @method get
-     *
-     * @return state {Number|Array}
-     */
-    SnapTransition.prototype.get = function get() {
-        _update.call(this);
-        return _getParticlePosition.call(this);
-    };
-
-    /**
-     * Set the end position and transition, with optional callback on completion.
-     *
-     * @method set
-     *
-     * @param state {Number|Array}      Final state
-     * @param [definition] {Object}     Transition definition
-     * @param [callback] {Function}     Callback
-     */
-    SnapTransition.prototype.set = function set(state, definition, callback) {
-        if (!definition) {
-            this.reset(state);
-            if (callback) callback();
-            return;
-        }
-
-        this._dimensions = (state instanceof Array)
-            ? state.length
-            : 0;
-
-        _wake.call(this);
-        _setupDefinition.call(this, definition);
-        _setTarget.call(this, state);
-        _setCallback.call(this, callback);
-    };
-
-    module.exports = SnapTransition;
+    module.exports = Walls;
 
 
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -10449,6 +11189,426 @@ define('famous/physics/forces/Force',['require','exports','module','famous/math/
     };
 
     module.exports = Force;
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: david@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+define('famous/physics/forces/Drag',['require','exports','module','./Force'],function(require, exports, module) {
+    var Force = require('./Force');
+
+    /**
+     * Drag is a force that opposes velocity. Attach it to the physics engine
+     * to slow down a physics body in motion.
+     *
+     * @class Drag
+     * @constructor
+     * @extends Force
+     * @param {Object} options options to set on drag
+     */
+    function Drag(options) {
+        this.options = Object.create(this.constructor.DEFAULT_OPTIONS);
+        if (options) this.setOptions(options);
+
+        Force.call(this);
+    }
+
+    Drag.prototype = Object.create(Force.prototype);
+    Drag.prototype.constructor = Drag;
+
+    /**
+     * @property Drag.FORCE_FUNCTIONS
+     * @type Object
+     * @protected
+     * @static
+     */
+    Drag.FORCE_FUNCTIONS = {
+
+        /**
+         * A drag force proportional to the velocity
+         * @attribute LINEAR
+         * @type Function
+         * @param {Vector} velocity
+         * @return {Vector} drag force
+         */
+        LINEAR : function(velocity) {
+            return velocity;
+        },
+
+        /**
+         * A drag force proportional to the square of the velocity
+         * @attribute QUADRATIC
+         * @type Function
+         * @param {Vector} velocity
+         * @return {Vector} drag force
+         */
+        QUADRATIC : function(velocity) {
+            return velocity.mult(velocity.norm());
+        }
+    };
+
+    /**
+     * @property Drag.DEFAULT_OPTIONS
+     * @type Object
+     * @protected
+     * @static
+     */
+    Drag.DEFAULT_OPTIONS = {
+
+        /**
+         * The strength of the force
+         *    Range : [0, 0.1]
+         * @attribute strength
+         * @type Number
+         * @default 0.01
+         */
+        strength : 0.01,
+
+        /**
+         * The type of opposing force
+         * @attribute forceFunction
+         * @type Function
+         */
+        forceFunction : Drag.FORCE_FUNCTIONS.LINEAR
+    };
+
+    /**
+     * Adds a drag force to a physics body's force accumulator.
+     *
+     * @method applyForce
+     * @param targets {Array.Body} Array of bodies to apply drag force to.
+     */
+    Drag.prototype.applyForce = function applyForce(targets) {
+        var strength        = this.options.strength;
+        var forceFunction   = this.options.forceFunction;
+        var force           = this.force;
+        for (var index = 0; index < targets.length; index++) {
+            var particle = targets[index];
+            forceFunction(particle.velocity).mult(-strength).put(force);
+            particle.applyForce(force);
+        }
+    };
+
+    /**
+     * Basic options setter
+     *
+     * @method setOptions
+     * @param {Objects} options
+     */
+    Drag.prototype.setOptions = function setOptions(options) {
+        for (var key in options) this.options[key] = options[key];
+    };
+
+    module.exports = Drag;
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: david@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+//TODO: test options manager
+define('famous/physics/forces/Repulsion',['require','exports','module','./Force','famous/math/Vector'],function(require, exports, module) {
+    var Force = require('./Force');
+    var Vector = require('famous/math/Vector');
+
+    /**
+     *  Repulsion is a force that repels (attracts) bodies away (towards)
+     *    each other. A repulsion of negative strength is attractive.
+     *
+     *  @class Repulsion
+     *  @constructor
+     *  @extends Force
+     *  @param {Object} options overwrites default options
+     */
+    function Repulsion(options) {
+        this.options = Object.create(Repulsion.DEFAULT_OPTIONS);
+        if (options) this.setOptions(options);
+
+        //registers
+        this.disp  = new Vector();
+
+        Force.call(this);
+    }
+
+    Repulsion.prototype = Object.create(Force.prototype);
+    Repulsion.prototype.constructor = Repulsion;
+    /**
+     * @property Repulsion.DECAY_FUNCTIONS
+     * @type Object
+     * @protected
+     * @static
+     */
+    Repulsion.DECAY_FUNCTIONS = {
+
+        /**
+         * A linear decay function
+         * @attribute LINEAR
+         * @type Function
+         * @param {Number} r distance from the source body
+         * @param {Number} cutoff the effective radius of influence
+         */
+        LINEAR : function(r, cutoff) {
+            return Math.max(1 - (1 / cutoff) * r, 0);
+        },
+
+        /**
+         * A Morse potential decay function (http://en.wikipedia.org/wiki/Morse_potential)
+         * @attribute MORSE
+         * @type Function
+         * @param {Number} r distance from the source body
+         * @param {Number} cutoff the minimum radius of influence
+         */
+        MORSE : function(r, cutoff) {
+            var r0 = (cutoff === 0) ? 100 : cutoff;
+            var rShifted = r + r0 * (1 - Math.log(2)); //shift by x-intercept
+            return Math.max(1 - Math.pow(1 - Math.exp(rShifted/r0 - 1), 2), 0);
+        },
+
+        /**
+         * An inverse distance decay function
+         * @attribute INVERSE
+         * @type Function
+         * @param {Number} r distance from the source body
+         * @param {Number} cutoff a distance shift to avoid singularities
+         */
+        INVERSE : function(r, cutoff) {
+            return 1 / (1 - cutoff + r);
+        },
+
+        /**
+         * An inverse squared distance decay function
+         * @attribute INVERSE
+         * @type Function
+         * @param {Number} r distance from the source body
+         * @param {Number} cutoff a distance shift to avoid singularities
+         */
+        GRAVITY : function(r, cutoff) {
+            return 1 / (1 - cutoff + r*r);
+        }
+    };
+
+    /**
+     * @property Repulsion.DEFAULT_OPTIONS
+     * @type Object
+     * @protected
+     * @static
+     */
+    Repulsion.DEFAULT_OPTIONS = {
+
+        /**
+         * The strength of the force
+         *    Range : [0, 100]
+         * @attribute strength
+         * @type Number
+         * @default 1
+         */
+        strength : 1,
+
+        /**
+         * The location of the force, if not another physics body
+         *
+         * @attribute anchor
+         * @type Number
+         * @default 0.01
+         * @optional
+         */
+        anchor : undefined,
+
+        /**
+         * The range of the repulsive force
+         * @attribute radii
+         * @type Array
+         * @default [0, Infinity]
+         */
+        range : [0, Infinity],
+
+        /**
+         * A normalization for the force to avoid singularities at the origin
+         * @attribute cutoff
+         * @type Number
+         * @default 0
+         */
+        cutoff : 0,
+
+        /**
+         * The maximum magnitude of the force
+         *    Range : [0, Infinity]
+         * @attribute cap
+         * @type Number
+         * @default Infinity
+         */
+        cap : Infinity,
+
+        /**
+         * The type of decay the repulsive force should have
+         * @attribute decayFunction
+         * @type Function
+         */
+        decayFunction : Repulsion.DECAY_FUNCTIONS.GRAVITY
+    };
+
+    /*
+     * Setter for options.
+     *
+     * @method setOptions
+     * @param {Objects} options
+     */
+    Repulsion.prototype.setOptions = function setOptions(options) {
+        if (options.anchor !== undefined) {
+            if (options.anchor.position instanceof Vector) this.options.anchor = options.anchor.position;
+            if (options.anchor   instanceof Array)  this.options.anchor = new Vector(options.anchor);
+            delete options.anchor;
+        }
+        for (var key in options) this.options[key] = options[key];
+    };
+
+    /**
+     * Adds a drag force to a physics body's force accumulator.
+     *
+     * @method applyForce
+     * @param targets {Array.Body}  Array of bodies to apply force to
+     * @param source {Body}         The source of the force
+     */
+    Repulsion.prototype.applyForce = function applyForce(targets, source) {
+        var options     = this.options;
+        var force       = this.force;
+        var disp        = this.disp;
+
+        var strength    = options.strength;
+        var anchor      = options.anchor || source.position;
+        var cap         = options.cap;
+        var cutoff      = options.cutoff;
+        var rMin        = options.range[0];
+        var rMax        = options.range[1];
+        var decayFn     = options.decayFunction;
+
+        if (strength === 0) return;
+
+        for (var index in targets) {
+            var particle = targets[index];
+
+            if (particle === source) continue;
+
+            var m1 = particle.mass;
+            var p1 = particle.position;
+
+            disp.set(p1.sub(anchor));
+            var r = disp.norm();
+
+            if (r < rMax && r > rMin) {
+                force.set(disp.normalize(strength * m1 * decayFn(r, cutoff)).cap(cap));
+                particle.applyForce(force);
+            }
+        }
+
+    };
+
+    module.exports = Repulsion;
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: david@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+define('famous/physics/forces/RotationalDrag',['require','exports','module','./Drag'],function(require, exports, module) {
+    var Drag = require('./Drag');
+
+    /**
+     * Rotational drag is a force that opposes angular velocity.
+     *   Attach it to a physics body to slow down its rotation.
+     *
+     * @class RotationalDrag
+     * @constructor
+     * @extends Force
+     * @param {Object} options options to set on drag
+     */
+    function RotationalDrag(options) {
+        Drag.call(this, options);
+    }
+
+    RotationalDrag.prototype = Object.create(Drag.prototype);
+    RotationalDrag.prototype.constructor = RotationalDrag;
+
+    RotationalDrag.DEFAULT_OPTIONS = Drag.DEFAULT_OPTIONS;
+    RotationalDrag.FORCE_FUNCTIONS = Drag.FORCE_FUNCTIONS;
+
+    /**
+     * @property Repulsion.FORCE_FUNCTIONS
+     * @type Object
+     * @protected
+     * @static
+     */
+    RotationalDrag.FORCE_FUNCTIONS = {
+
+        /**
+         * A drag force proprtional to the angular velocity
+         * @attribute LINEAR
+         * @type Function
+         * @param {Vector} angularVelocity
+         * @return {Vector} drag force
+         */
+        LINEAR : function(angularVelocity) {
+            return angularVelocity;
+        },
+
+        /**
+         * A drag force proprtional to the square of the angular velocity
+         * @attribute QUADRATIC
+         * @type Function
+         * @param {Vector} angularVelocity
+         * @return {Vector} drag force
+         */
+        QUADRATIC : function(angularVelocity) {
+            return angularVelocity.mult(angularVelocity.norm());
+        }
+    };
+
+    /**
+     * Adds a rotational drag force to a physics body's torque accumulator.
+     *
+     * @method applyForce
+     * @param targets {Array.Body} Array of bodies to apply drag force to.
+     */
+    RotationalDrag.prototype.applyForce = function applyForce(targets) {
+        var strength       = this.options.strength;
+        var forceFunction  = this.options.forceFunction;
+        var force          = this.force;
+
+        //TODO: rotational drag as function of inertia
+        for (var index = 0; index < targets.length; index++) {
+            var particle = targets[index];
+            forceFunction(particle.angularVelocity).mult(-100*strength).put(force);
+            particle.applyTorque(force);
+        }
+    };
+
+    /*
+     * Setter for options.
+     *
+     * @method setOptions
+     * @param {Objects} options
+     */
+    RotationalDrag.prototype.setOptions = function setOptions(options) {
+        for (var key in options) this.options[key] = options[key];
+    };
+
+    module.exports = RotationalDrag;
 
 
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -10720,463 +11880,85 @@ define('famous/physics/forces/Spring',['require','exports','module','./Force','f
  * @copyright Famous Industries, Inc. 2014
  */
 
-/*global console*/
-
-define('famous/transitions/SpringTransition',['require','exports','module','famous/physics/PhysicsEngine','famous/physics/bodies/Particle','famous/physics/forces/Spring','famous/math/Vector'],function(require, exports, module) {
-    var PE = require('famous/physics/PhysicsEngine');
-    var Particle = require('famous/physics/bodies/Particle');
-    var Spring = require('famous/physics/forces/Spring');
-    var Vector = require('famous/math/Vector');
+//TODO: test inheritance
+define('famous/physics/forces/RotationalSpring',['require','exports','module','./Spring'],function(require, exports, module) {
+    var Spring = require('./Spring');
 
     /**
-     * SpringTransition is a method of transitioning between two values (numbers,
-     * or arrays of numbers) with a bounce. The transition will overshoot the target
-     * state depending on the parameters of the transition.
+     *  A force that rotates a physics body back to target Euler angles.
+     *  Just as a spring translates a body to a particular X, Y, Z, location,
+     *  a rotational spring rotates a body to a particular X, Y, Z Euler angle.
+     *      Note: there is no physical agent that does this in the "real world"
      *
-     * @class SpringTransition
-     * @constructor
-     *
-     * @param {Number|Array} [state=0] Initial state
-     */
-    function SpringTransition(state) {
-        state = state || 0;
-        this.endState  = new Vector(state);
-        this.initState = new Vector();
-
-        this._dimensions       = undefined;
-        this._restTolerance    = 1e-10;
-        this._absRestTolerance = this._restTolerance;
-        this._callback         = undefined;
-
-        this.PE       = new PE();
-        this.spring   = new Spring({anchor : this.endState});
-        this.particle = new Particle();
-
-        this.PE.addBody(this.particle);
-        this.PE.attach(this.spring, this.particle);
-    }
-
-    SpringTransition.SUPPORTS_MULTIPLE = 3;
-
-    /**
-     * @property SpringTransition.DEFAULT_OPTIONS
-     * @type Object
-     * @protected
-     * @static
-     */
-    SpringTransition.DEFAULT_OPTIONS = {
-
-        /**
-         * The amount of time in milliseconds taken for one complete oscillation
-         * when there is no damping
-         *    Range : [0, Infinity]
-         *
-         * @attribute period
-         * @type Number
-         * @default 300
-         */
-        period : 300,
-
-        /**
-         * The damping of the snap.
-         *    Range : [0, 1]
-         *    0 = no damping, and the spring will oscillate forever
-         *    1 = critically damped (the spring will never oscillate)
-         *
-         * @attribute dampingRatio
-         * @type Number
-         * @default 0.5
-         */
-        dampingRatio : 0.5,
-
-        /**
-         * The initial velocity of the transition.
-         *
-         * @attribute velocity
-         * @type Number|Array
-         * @default 0
-         */
-        velocity : 0
-    };
-
-    function _getEnergy() {
-        return this.particle.getEnergy() + this.spring.getEnergy(this.particle);
-    }
-
-    function _setParticlePosition(p) {
-        this.particle.setPosition(p);
-    }
-
-    function _setParticleVelocity(v) {
-        this.particle.setVelocity(v);
-    }
-
-    function _getParticlePosition() {
-        return (this._dimensions === 0)
-            ? this.particle.getPosition1D()
-            : this.particle.getPosition();
-    }
-
-    function _getParticleVelocity() {
-        return (this._dimensions === 0)
-            ? this.particle.getVelocity1D()
-            : this.particle.getVelocity();
-    }
-
-    function _setCallback(callback) {
-        this._callback = callback;
-    }
-
-    function _wake() {
-        this.PE.wake();
-    }
-
-    function _sleep() {
-        this.PE.sleep();
-    }
-
-    function _update() {
-        if (this.PE.isSleeping()) {
-            if (this._callback) {
-                var cb = this._callback;
-                this._callback = undefined;
-                cb();
-            }
-            return;
-        }
-
-        if (_getEnergy.call(this) < this._absRestTolerance) {
-            _setParticlePosition.call(this, this.endState);
-            _setParticleVelocity.call(this, [0,0,0]);
-            _sleep.call(this);
-        }
-    }
-
-    function _setupDefinition(definition) {
-        // TODO fix no-console error
-        /* eslint no-console: 0 */
-        var defaults = SpringTransition.DEFAULT_OPTIONS;
-        if (definition.period === undefined)       definition.period       = defaults.period;
-        if (definition.dampingRatio === undefined) definition.dampingRatio = defaults.dampingRatio;
-        if (definition.velocity === undefined)     definition.velocity     = defaults.velocity;
-
-        if (definition.period < 150) {
-            definition.period = 150;
-            console.warn('The period of a SpringTransition is capped at 150 ms. Use a SnapTransition for faster transitions');
-        }
-
-        //setup spring
-        this.spring.setOptions({
-            period       : definition.period,
-            dampingRatio : definition.dampingRatio
-        });
-
-        //setup particle
-        _setParticleVelocity.call(this, definition.velocity);
-    }
-
-    function _setAbsoluteRestTolerance() {
-        var distance = this.endState.sub(this.initState).normSquared();
-        this._absRestTolerance = (distance === 0)
-            ? this._restTolerance
-            : this._restTolerance * distance;
-    }
-
-    function _setTarget(target) {
-        this.endState.set(target);
-        _setAbsoluteRestTolerance.call(this);
-    }
-
-    /**
-     * Resets the position and velocity
-     *
-     * @method reset
-     *
-     * @param {Number|Array.Number} pos positional state
-     * @param {Number|Array} vel velocity
-     */
-    SpringTransition.prototype.reset = function reset(pos, vel) {
-        this._dimensions = (pos instanceof Array)
-            ? pos.length
-            : 0;
-
-        this.initState.set(pos);
-        _setParticlePosition.call(this, pos);
-        _setTarget.call(this, pos);
-        if (vel) _setParticleVelocity.call(this, vel);
-        _setCallback.call(this, undefined);
-    };
-
-    /**
-     * Getter for velocity
-     *
-     * @method getVelocity
-     *
-     * @return {Number|Array} velocity
-     */
-    SpringTransition.prototype.getVelocity = function getVelocity() {
-        return _getParticleVelocity.call(this);
-    };
-
-    /**
-     * Setter for velocity
-     *
-     * @method setVelocity
-     *
-     * @return {Number|Array} velocity
-     */
-    SpringTransition.prototype.setVelocity = function setVelocity(v) {
-        this.call(this, _setParticleVelocity(v));
-    };
-
-    /**
-     * Detects whether a transition is in progress
-     *
-     * @method isActive
-     *
-     * @return {Boolean}
-     */
-    SpringTransition.prototype.isActive = function isActive() {
-        return !this.PE.isSleeping();
-    };
-
-    /**
-     * Halt the transition
-     *
-     * @method halt
-     */
-    SpringTransition.prototype.halt = function halt() {
-        this.set(this.get());
-    };
-
-    /**
-     * Get the current position of the transition
-     *
-     * @method get
-     *
-     * @return {Number|Array} state
-     */
-    SpringTransition.prototype.get = function get() {
-        _update.call(this);
-        return _getParticlePosition.call(this);
-    };
-
-    /**
-     * Set the end position and transition, with optional callback on completion.
-     *
-     * @method set
-     *
-     * @param  {Number|Array} endState Final state
-     * @param {Object}  definition  Transition definition
-     * @param  {Function} callback Callback
-     */
-    SpringTransition.prototype.set = function set(endState, definition, callback) {
-        if (!definition) {
-            this.reset(endState);
-            if (callback) callback();
-            return;
-        }
-
-        this._dimensions = (endState instanceof Array)
-            ? endState.length
-            : 0;
-
-        _wake.call(this);
-        _setupDefinition.call(this, definition);
-        _setTarget.call(this, endState);
-        _setCallback.call(this, callback);
-    };
-
-    module.exports = SpringTransition;
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: david@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/physics/constraints/Wall',['require','exports','module','./Constraint','famous/math/Vector'],function(require, exports, module) {
-    var Constraint = require('./Constraint');
-    var Vector = require('famous/math/Vector');
-
-    /**
-     *  A wall describes an infinite two-dimensional plane that physics bodies
-     *    can collide with. To define a wall, you must give it a distance (from
-     *    the center of the physics engine's origin, and a normal defining the plane
-     *    of the wall.
-     *
-     *    (wall)
-     *      |
-     *      | (normal)     (origin)
-     *      | --->            *
-     *      |
-     *      |    (distance)
-     *      ...................
-     *            (100px)
-     *
-     *      e.g., Wall({normal : [1,0,0], distance : 100})
-     *      would be a wall 100 pixels to the left, whose normal points right
-     *
-     *  @class Wall
+     *  @class RotationalSpring
      *  @constructor
-     *  @extends Constraint
-     *  @param {Options} [options] An object of configurable options.
-     *  @param {Number} [options.restitution] The energy ratio lost in a collision (0 = stick, 1 = elastic). Range : [0, 1]
-     *  @param {Number} [options.drift] Baumgarte stabilization parameter. Makes constraints "loosely" (0) or "tightly" (1) enforced. Range : [0, 1]
-     *  @param {Number} [options.slop] Amount of penetration in pixels to ignore before collision event triggers.
-     *  @param {Array} [options.normal] The normal direction to the wall.
-     *  @param {Number} [options.distance] The distance from the origin that the wall is placed.
-     *  @param {onContact} [options.onContact] How to handle collision against the wall.
-     *
+     *  @extends Spring
+     *  @param {Object} options options to set on drag
      */
-    function Wall(options) {
-        this.options = Object.create(Wall.DEFAULT_OPTIONS);
-        if (options) this.setOptions(options);
-
-        //registers
-        this.diff = new Vector();
-        this.impulse = new Vector();
-
-        Constraint.call(this);
+    function RotationalSpring(options) {
+        Spring.call(this, options);
     }
 
-    Wall.prototype = Object.create(Constraint.prototype);
-    Wall.prototype.constructor = Wall;
+    RotationalSpring.prototype = Object.create(Spring.prototype);
+    RotationalSpring.prototype.constructor = RotationalSpring;
+
+    RotationalSpring.DEFAULT_OPTIONS = Spring.DEFAULT_OPTIONS;
+    RotationalSpring.FORCE_FUNCTIONS = Spring.FORCE_FUNCTIONS;
 
     /**
-     * @property Wall.ON_CONTACT
-     * @type Object
-     * @protected
-     * @static
-     */
-    Wall.ON_CONTACT = {
-
-        /**
-         * Physical bodies bounce off the wall
-         * @attribute REFLECT
-         */
-        REFLECT : 0,
-
-        /**
-         * Physical bodies are unaffected. Usecase is to fire events on contact.
-         * @attribute SILENT
-         */
-        SILENT : 1
-    };
-
-    Wall.DEFAULT_OPTIONS = {
-        restitution : 0.5,
-        drift : 0.5,
-        slop : 0,
-        normal : [1, 0, 0],
-        distance : 0,
-        onContact : Wall.ON_CONTACT.REFLECT
-    };
-
-    /*
-     * Setter for options.
+     * Adds a torque force to a physics body's torque accumulator.
      *
-     * @method setOptions
-     * @param options {Objects}
+     * @method applyForce
+     * @param targets {Array.Body} Array of bodies to apply torque to.
      */
-    Wall.prototype.setOptions = function setOptions(options) {
-        if (options.normal !== undefined) {
-            if (options.normal instanceof Vector) this.options.normal = options.normal.clone();
-            if (options.normal instanceof Array)  this.options.normal = new Vector(options.normal);
-        }
-        if (options.restitution !== undefined) this.options.restitution = options.restitution;
-        if (options.drift !== undefined) this.options.drift = options.drift;
-        if (options.slop !== undefined) this.options.slop = options.slop;
-        if (options.distance !== undefined) this.options.distance = options.distance;
-        if (options.onContact !== undefined) this.options.onContact = options.onContact;
-    };
+    RotationalSpring.prototype.applyForce = function applyForce(targets) {
+        var force        = this.force;
+        var options      = this.options;
+        var disp         = this.disp;
 
-    function _getNormalVelocity(n, v) {
-        return v.dot(n);
-    }
-
-    function _getDistanceFromOrigin(p) {
-        var n = this.options.normal;
-        var d = this.options.distance;
-        return p.dot(n) + d;
-    }
-
-    function _onEnter(particle, overlap, dt) {
-        var p = particle.position;
-        var v = particle.velocity;
-        var m = particle.mass;
-        var n = this.options.normal;
-        var action = this.options.onContact;
-        var restitution = this.options.restitution;
-        var impulse = this.impulse;
-
-        var drift = this.options.drift;
-        var slop = -this.options.slop;
-        var gamma = 0;
-
-        if (this._eventOutput) {
-            var data = {particle : particle, wall : this, overlap : overlap, normal : n};
-            this._eventOutput.emit('preCollision', data);
-            this._eventOutput.emit('collision', data);
-        }
-
-        switch (action) {
-            case Wall.ON_CONTACT.REFLECT:
-                var lambda = (overlap < slop)
-                    ? -((1 + restitution) * n.dot(v) + drift / dt * (overlap - slop)) / (m * dt + gamma)
-                    : -((1 + restitution) * n.dot(v)) / (m * dt + gamma);
-
-                impulse.set(n.mult(dt * lambda));
-                particle.applyImpulse(impulse);
-                particle.setPosition(p.add(n.mult(-overlap)));
-                break;
-        }
-
-        if (this._eventOutput) this._eventOutput.emit('postCollision', data);
-    }
-
-    function _onExit(particle, overlap, dt) {
-        var action = this.options.onContact;
-        var p = particle.position;
-        var n = this.options.normal;
-
-        if (action === Wall.ON_CONTACT.REFLECT) {
-            particle.setPosition(p.add(n.mult(-overlap)));
-        }
-    }
-
-    /**
-     * Adds an impulse to a physics body's velocity due to the wall constraint
-     *
-     * @method applyConstraint
-     * @param targets {Array.Body}  Array of bodies to apply the constraint to
-     * @param source {Body}         The source of the constraint
-     * @param dt {Number}           Delta time
-     */
-    Wall.prototype.applyConstraint = function applyConstraint(targets, source, dt) {
-        var n = this.options.normal;
+        var stiffness    = options.stiffness;
+        var damping      = options.damping;
+        var restLength   = options.length;
+        var anchor       = options.anchor;
 
         for (var i = 0; i < targets.length; i++) {
-            var particle = targets[i];
-            var p = particle.position;
-            var v = particle.velocity;
-            var r = particle.radius || 0;
+            var target = targets[i];
 
-            var overlap = _getDistanceFromOrigin.call(this, p.add(n.mult(-r)));
-            var nv = _getNormalVelocity.call(this, n, v);
+            disp.set(anchor.sub(target.orientation));
+            var dist = disp.norm() - restLength;
 
-            if (overlap <= 0) {
-                if (nv < 0) _onEnter.call(this, particle, overlap, dt);
-                else _onExit.call(this, particle, overlap, dt);
-            }
+            if (dist === 0) return;
+
+            //if dampingRatio specified, then override strength and damping
+            var m      = target.mass;
+            stiffness *= m;
+            damping   *= m;
+
+            force.set(disp.normalize(stiffness * this.forceFunction(dist, this.options.lMax)));
+
+            if (damping) force.set(force.add(target.angularVelocity.mult(-damping)));
+
+            target.applyTorque(force);
         }
     };
 
-    module.exports = Wall;
+    /**
+     * Calculates the potential energy of the rotational spring.
+     *
+     * @method getEnergy
+     * @param {Body} target The physics body attached to the spring
+     */
+    RotationalSpring.prototype.getEnergy = function getEnergy(target) {
+        var options     = this.options;
+        var restLength  = options.length;
+        var anchor      = options.anchor;
+        var strength    = options.stiffness;
+
+        var dist = anchor.sub(target.orientation).norm() - restLength;
+        return 0.5 * strength * dist * dist;
+    };
+
+    module.exports = RotationalSpring;
 
 
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -11188,295 +11970,180 @@ define('famous/physics/constraints/Wall',['require','exports','module','./Constr
  * @copyright Famous Industries, Inc. 2014
  */
 
-define('famous/transitions/WallTransition',['require','exports','module','famous/physics/PhysicsEngine','famous/physics/bodies/Particle','famous/physics/forces/Spring','famous/physics/constraints/Wall','famous/math/Vector'],function(require, exports, module) {
-    var PE = require('famous/physics/PhysicsEngine');
-    var Particle = require('famous/physics/bodies/Particle');
-    var Spring = require('famous/physics/forces/Spring');
-    var Wall = require('famous/physics/constraints/Wall');
+define('famous/physics/forces/VectorField',['require','exports','module','./Force','famous/math/Vector'],function(require, exports, module) {
+    var Force = require('./Force');
     var Vector = require('famous/math/Vector');
 
     /**
-     * WallTransition is a method of transitioning between two values (numbers,
-     *   or arrays of numbers) with a bounce. Unlike a SpringTransition
-     *   The transition will not overshoot the target, but bounce back against it.
-     *   The behavior of the bounce is specified by the transition options.
+     *  A force that moves a physics body to a location with a spring motion.
+     *    The body can be moved to another physics body, or an anchor point.
      *
-     * @class WallTransition
-     * @constructor
-     *
-     * @param {Number|Array} [state=0] Initial state
+     *  @class VectorField
+     *  @constructor
+     *  @extends Force
+     *  @param {Object} options options to set on drag
      */
-    function WallTransition(state) {
-        state = state || 0;
+    function VectorField(options) {
+        this.options = Object.create(VectorField.DEFAULT_OPTIONS);
+        if (options) this.setOptions(options);
 
-        this.endState  = new Vector(state);
-        this.initState = new Vector();
+        _setFieldOptions.call(this, this.options.field);
+        Force.call(this);
 
-        this.spring = new Spring({anchor : this.endState});
-        this.wall   = new Wall();
-
-        this._restTolerance = 1e-10;
-        this._dimensions = 1;
-        this._absRestTolerance = this._restTolerance;
-        this._callback = undefined;
-
-        this.PE = new PE();
-        this.particle = new Particle();
-
-        this.PE.addBody(this.particle);
-        this.PE.attach([this.wall, this.spring], this.particle);
+        //registers
+        this.evaluation = new Vector(0,0,0);
     }
 
-    WallTransition.SUPPORTS_MULTIPLE = 3;
+    VectorField.prototype = Object.create(Force.prototype);
+    VectorField.prototype.constructor = VectorField;
 
     /**
-     * @property WallTransition.DEFAULT_OPTIONS
+     * @property Spring.FORCE_FUNCTIONS
      * @type Object
      * @protected
      * @static
      */
-    WallTransition.DEFAULT_OPTIONS = {
+    VectorField.FIELDS = {
+        /**
+         * Constant force, e.g., gravity
+         * @attribute CONSTANT
+         * @type Function
+         * @param v {Vector}        Current position of physics body
+         * @param options {Object}  The direction of the force
+         *      Pass a {direction : Vector} into the VectorField options
+         * @return {Number} unscaled force
+         */
+        CONSTANT : function(v, options) {
+            return v.set(options.direction);
+        },
 
         /**
-         * The amount of time in milliseconds taken for one complete oscillation
-         * when there is no damping
-         *    Range : [0, Infinity]
-         *
-         * @attribute period
-         * @type Number
-         * @default 300
+         * Linear force
+         * @attribute LINEAR
+         * @type Function
+         * @param v {Vector} Current position of physics body
+         * @return {Number} unscaled force
          */
-        period : 300,
+        LINEAR : function(v) {
+            return v;
+        },
 
         /**
-         * The damping of the snap.
-         *    Range : [0, 1]
-         *    0 = no damping, and the spring will oscillate forever
-         *    1 = critically damped (the spring will never oscillate)
-         *
-         * @attribute dampingRatio
-         * @type Number
-         * @default 0.5
+         * Radial force, e.g., Hookean spring
+         * @attribute RADIAL
+         * @type Function
+         * @param v {Vector} Current position of physics body
+         * @return {Number} unscaled force
          */
-        dampingRatio : 0.5,
+        RADIAL : function(v) {
+            return v.set(v.mult(-1, v));
+        },
 
         /**
-         * The initial velocity of the transition.
-         *
-         * @attribute velocity
-         * @type Number|Array
-         * @default 0
+         * Spherical force
+         * @attribute SPHERE_ATTRACTOR
+         * @type Function
+         * @param v {Vector}        Current position of physics body
+         * @param options {Object}  An object with the radius of the sphere
+         *      Pass a {radius : Number} into the VectorField options
+         * @return {Number} unscaled force
          */
-        velocity : 0,
+        SPHERE_ATTRACTOR : function(v, options) {
+            return v.set(v.mult((options.radius - v.norm()) / v.norm()));
+        },
 
         /**
-         * The percentage of momentum transferred to the wall
-         *
-         * @attribute restitution
-         * @type Number
-         * @default 0.5
+         * Point attractor force, e.g., Hookean spring with an anchor
+         * @attribute POINT_ATTRACTOR
+         * @type Function
+         * @param v {Vector}        Current position of physics body
+         * @param options {Object}  And object with the position of the attractor
+         *      Pass a {position : Vector} into the VectorField options
+         * @return {Number} unscaled force
          */
-        resitution : 0.5
+        POINT_ATTRACTOR : function(v, options) {
+            return v.set(options.position.sub(v));
+        }
     };
 
-    function _getEnergy() {
-        return this.particle.getEnergy() + this.spring.getEnergy(this.particle);
-    }
+    /**
+     * @property VectorField.DEFAULT_OPTIONS
+     * @type Object
+     * @protected
+     * @static
+     */
+    VectorField.DEFAULT_OPTIONS = {
 
-    function _setAbsoluteRestTolerance() {
-        var distance = this.endState.sub(this.initState).normSquared();
-        this._absRestTolerance = (distance === 0)
-            ? this._restTolerance
-            : this._restTolerance * distance;
-    }
+        /**
+         * The strength of the force
+         *    Range : [0, 10]
+         * @attribute strength
+         * @type Number
+         * @default 1
+         */
+        strength : 1,
 
-    function _wake() {
-        this.PE.wake();
-    }
+        /**
+         * Type of vectorfield
+         *    Range : [0, 100]
+         * @attribute field
+         * @type Function
+         */
+        field : VectorField.FIELDS.CONSTANT
+    };
 
-    function _sleep() {
-        this.PE.sleep();
-    }
+    /**
+     * Basic options setter
+     *
+     * @method setOptions
+     * @param {Objects} options
+     */
+    VectorField.prototype.setOptions = function setOptions(options) {
+        for (var key in options) this.options[key] = options[key];
+    };
 
-    function _setTarget(target) {
-        this.endState.set(target);
+    function _setFieldOptions(field) {
+        var FIELDS = VectorField.FIELDS;
 
-        var dist = this.endState.sub(this.initState).norm();
-
-        this.wall.setOptions({
-            distance : this.endState.norm(),
-            normal : (dist === 0)
-                ? this.particle.velocity.normalize(-1)
-                : this.endState.sub(this.initState).normalize(-1)
-        });
-
-        _setAbsoluteRestTolerance.call(this);
-    }
-
-    function _setParticlePosition(p) {
-        this.particle.position.set(p);
-    }
-
-    function _setParticleVelocity(v) {
-        this.particle.velocity.set(v);
-    }
-
-    function _getParticlePosition() {
-        return (this._dimensions === 0)
-            ? this.particle.getPosition1D()
-            : this.particle.getPosition();
-    }
-
-    function _getParticleVelocity() {
-        return (this._dimensions === 0)
-            ? this.particle.getVelocity1D()
-            : this.particle.getVelocity();
-    }
-
-    function _setCallback(callback) {
-        this._callback = callback;
-    }
-
-    function _update() {
-        if (this.PE.isSleeping()) {
-            if (this._callback) {
-                var cb = this._callback;
-                this._callback = undefined;
-                cb();
-            }
-            return;
-        }
-        var energy = _getEnergy.call(this);
-        if (energy < this._absRestTolerance) {
-            _sleep.call(this);
-            _setParticlePosition.call(this, this.endState);
-            _setParticleVelocity.call(this, [0,0,0]);
+        switch (field) {
+            case FIELDS.CONSTANT:
+                if (!this.options.direction) this.options.direction = new Vector(0,1,0);
+                break;
+            case FIELDS.POINT_ATTRACTOR:
+                if (!this.options.position) this.options.position = new Vector(0,0,0);
+                break;
+            case FIELDS.SPHERE_ATTRACTOR:
+                if (!this.options.radius) this.options.radius = 1;
+                break;
         }
     }
 
-    function _setupDefinition(def) {
-        var defaults = WallTransition.DEFAULT_OPTIONS;
-        if (def.period === undefined) def.period = defaults.period;
-        if (def.dampingRatio === undefined) def.dampingRatio = defaults.dampingRatio;
-        if (def.velocity === undefined) def.velocity = defaults.velocity;
-        if (def.restitution === undefined) def.restitution = defaults.restitution;
-
-        //setup spring
-        this.spring.setOptions({
-            period : def.period,
-            dampingRatio : def.dampingRatio
-        });
-
-        //setup wall
-        this.wall.setOptions({
-            restitution : def.restitution
-        });
-
-        //setup particle
-        _setParticleVelocity.call(this, def.velocity);
+    function _evaluate(v) {
+        var evaluation = this.evaluation;
+        var field = this.options.field;
+        evaluation.set(v);
+        return field(evaluation, this.options);
     }
 
     /**
-     * Resets the state and velocity
+     * Adds the vectorfield's force to a physics body's force accumulator.
      *
-     * @method reset
-     *
-     * @param {Number|Array}  state     State
-     * @param  {Number|Array} [velocity] Velocity
+     * @method applyForce
+     * @param targets {Array.body} Array of bodies to apply force to.
      */
-    WallTransition.prototype.reset = function reset(state, velocity) {
-        this._dimensions = (state instanceof Array)
-            ? state.length
-            : 0;
-
-        this.initState.set(state);
-        _setParticlePosition.call(this, state);
-        if (velocity) _setParticleVelocity.call(this, velocity);
-        _setTarget.call(this, state);
-        _setCallback.call(this, undefined);
-    };
-
-    /**
-     * Getter for velocity
-     *
-     * @method getVelocity
-     *
-     * @return velocity {Number|Array}
-     */
-    WallTransition.prototype.getVelocity = function getVelocity() {
-        return _getParticleVelocity.call(this);
-    };
-
-    /**
-     * Setter for velocity
-     *
-     * @method setVelocity
-     *
-     * @return velocity {Number|Array}
-     */
-    WallTransition.prototype.setVelocity = function setVelocity(velocity) {
-        this.call(this, _setParticleVelocity(velocity));
-    };
-
-    /**
-     * Detects whether a transition is in progress
-     *
-     * @method isActive
-     *
-     * @return {Boolean}
-     */
-    WallTransition.prototype.isActive = function isActive() {
-        return !this.PE.isSleeping();
-    };
-
-    /**
-     * Halt the transition
-     *
-     * @method halt
-     */
-    WallTransition.prototype.halt = function halt() {
-        this.set(this.get());
-    };
-
-    /**
-     * Getter
-     *
-     * @method get
-     *
-     * @return state {Number|Array}
-     */
-    WallTransition.prototype.get = function get() {
-        _update.call(this);
-        return _getParticlePosition.call(this);
-    };
-
-    /**
-     * Set the end position and transition, with optional callback on completion.
-     *
-     * @method set
-     *
-     * @param state {Number|Array}      Final state
-     * @param [definition] {Object}     Transition definition
-     * @param [callback] {Function}     Callback
-     */
-    WallTransition.prototype.set = function set(state, definition, callback) {
-        if (!definition) {
-            this.reset(state);
-            if (callback) callback();
-            return;
+    VectorField.prototype.applyForce = function applyForce(targets) {
+        var force = this.force;
+        for (var i = 0; i < targets.length; i++) {
+            var particle = targets[i];
+            force.set(
+                _evaluate.call(this, particle.position)
+                .mult(particle.mass * this.options.strength)
+            );
+            particle.applyForce(force);
         }
-
-        this._dimensions = (state instanceof Array)
-            ? state.length
-            : 0;
-
-        _wake.call(this);
-        _setupDefinition.call(this, definition);
-        _setTarget.call(this, state);
-        _setCallback.call(this, callback);
     };
 
-    module.exports = WallTransition;
+    module.exports = VectorField;
 
 
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -12282,6 +12949,1199 @@ define('famous/surfaces/VideoSurface',['require','exports','module','famous/core
     };
 
     module.exports = VideoSurface;
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: david@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+define('famous/transitions/CachedMap',['require','exports','module'],function(require, exports, module) {
+    /**
+     * A simple in-memory object cache.  Used as a helper for Views with
+     * provider functions.
+     * @class CachedMap
+     * @constructor
+     */
+    function CachedMap(mappingFunction) {
+        this._map = mappingFunction || null;
+        this._cachedOutput = null;
+        this._cachedInput = Number.NaN; //never valid as input
+    }
+
+    /**
+     * Creates a mapping function with a cache.
+     * This is the main entrypoint for this object.
+     * @static
+     * @method create
+     * @param {function} mappingFunction mapping
+     * @return {function} memoized mapping function
+     */
+    CachedMap.create = function create(mappingFunction) {
+        var instance = new CachedMap(mappingFunction);
+        return instance.get.bind(instance);
+    };
+
+    /**
+     * Retrieve items from cache or from mapping functin.
+     *
+     * @method get
+     * @param {Object} input input key
+     */
+    CachedMap.prototype.get = function get(input) {
+        if (input !== this._cachedInput) {
+            this._cachedInput = input;
+            this._cachedOutput = this._map(input);
+        }
+        return this._cachedOutput;
+    };
+
+    module.exports = CachedMap;
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: david@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+define('famous/transitions/Easing',['require','exports','module'],function(require, exports, module) {
+
+    /*
+     * A library of curves which map an animation explicitly as a function of time.
+     *
+     * @class Easing
+     */
+    var Easing = {
+
+        /**
+         * @property inQuad
+         * @static
+         */
+        inQuad: function(t) {
+            return t*t;
+        },
+
+        /**
+         * @property outQuad
+         * @static
+         */
+        outQuad: function(t) {
+            return -(t-=1)*t+1;
+        },
+
+        /**
+         * @property inOutQuad
+         * @static
+         */
+        inOutQuad: function(t) {
+            if ((t/=.5) < 1) return .5*t*t;
+            return -.5*((--t)*(t-2) - 1);
+        },
+
+        /**
+         * @property inCubic
+         * @static
+         */
+        inCubic: function(t) {
+            return t*t*t;
+        },
+
+        /**
+         * @property outCubic
+         * @static
+         */
+        outCubic: function(t) {
+            return ((--t)*t*t + 1);
+        },
+
+        /**
+         * @property inOutCubic
+         * @static
+         */
+        inOutCubic: function(t) {
+            if ((t/=.5) < 1) return .5*t*t*t;
+            return .5*((t-=2)*t*t + 2);
+        },
+
+        /**
+         * @property inQuart
+         * @static
+         */
+        inQuart: function(t) {
+            return t*t*t*t;
+        },
+
+        /**
+         * @property outQuart
+         * @static
+         */
+        outQuart: function(t) {
+            return -((--t)*t*t*t - 1);
+        },
+
+        /**
+         * @property inOutQuart
+         * @static
+         */
+        inOutQuart: function(t) {
+            if ((t/=.5) < 1) return .5*t*t*t*t;
+            return -.5 * ((t-=2)*t*t*t - 2);
+        },
+
+        /**
+         * @property inQuint
+         * @static
+         */
+        inQuint: function(t) {
+            return t*t*t*t*t;
+        },
+
+        /**
+         * @property outQuint
+         * @static
+         */
+        outQuint: function(t) {
+            return ((--t)*t*t*t*t + 1);
+        },
+
+        /**
+         * @property inOutQuint
+         * @static
+         */
+        inOutQuint: function(t) {
+            if ((t/=.5) < 1) return .5*t*t*t*t*t;
+            return .5*((t-=2)*t*t*t*t + 2);
+        },
+
+        /**
+         * @property inSine
+         * @static
+         */
+        inSine: function(t) {
+            return -1.0*Math.cos(t * (Math.PI/2)) + 1.0;
+        },
+
+        /**
+         * @property outSine
+         * @static
+         */
+        outSine: function(t) {
+            return Math.sin(t * (Math.PI/2));
+        },
+
+        /**
+         * @property inOutSine
+         * @static
+         */
+        inOutSine: function(t) {
+            return -.5*(Math.cos(Math.PI*t) - 1);
+        },
+
+        /**
+         * @property inExpo
+         * @static
+         */
+        inExpo: function(t) {
+            return (t===0) ? 0.0 : Math.pow(2, 10 * (t - 1));
+        },
+
+        /**
+         * @property outExpo
+         * @static
+         */
+        outExpo: function(t) {
+            return (t===1.0) ? 1.0 : (-Math.pow(2, -10 * t) + 1);
+        },
+
+        /**
+         * @property inOutExpo
+         * @static
+         */
+        inOutExpo: function(t) {
+            if (t===0) return 0.0;
+            if (t===1.0) return 1.0;
+            if ((t/=.5) < 1) return .5 * Math.pow(2, 10 * (t - 1));
+            return .5 * (-Math.pow(2, -10 * --t) + 2);
+        },
+
+        /**
+         * @property inCirc
+         * @static
+         */
+        inCirc: function(t) {
+            return -(Math.sqrt(1 - t*t) - 1);
+        },
+
+        /**
+         * @property outCirc
+         * @static
+         */
+        outCirc: function(t) {
+            return Math.sqrt(1 - (--t)*t);
+        },
+
+        /**
+         * @property inOutCirc
+         * @static
+         */
+        inOutCirc: function(t) {
+            if ((t/=.5) < 1) return -.5 * (Math.sqrt(1 - t*t) - 1);
+            return .5 * (Math.sqrt(1 - (t-=2)*t) + 1);
+        },
+
+        /**
+         * @property inElastic
+         * @static
+         */
+        inElastic: function(t) {
+            var s=1.70158;var p=0;var a=1.0;
+            if (t===0) return 0.0;  if (t===1) return 1.0;  if (!p) p=.3;
+            s = p/(2*Math.PI) * Math.asin(1.0/a);
+            return -(a*Math.pow(2,10*(t-=1)) * Math.sin((t-s)*(2*Math.PI)/ p));
+        },
+
+        /**
+         * @property outElastic
+         * @static
+         */
+        outElastic: function(t) {
+            var s=1.70158;var p=0;var a=1.0;
+            if (t===0) return 0.0;  if (t===1) return 1.0;  if (!p) p=.3;
+            s = p/(2*Math.PI) * Math.asin(1.0/a);
+            return a*Math.pow(2,-10*t) * Math.sin((t-s)*(2*Math.PI)/p) + 1.0;
+        },
+
+        /**
+         * @property inOutElastic
+         * @static
+         */
+        inOutElastic: function(t) {
+            var s=1.70158;var p=0;var a=1.0;
+            if (t===0) return 0.0;  if ((t/=.5)===2) return 1.0;  if (!p) p=(.3*1.5);
+            s = p/(2*Math.PI) * Math.asin(1.0/a);
+            if (t < 1) return -.5*(a*Math.pow(2,10*(t-=1)) * Math.sin((t-s)*(2*Math.PI)/p));
+            return a*Math.pow(2,-10*(t-=1)) * Math.sin((t-s)*(2*Math.PI)/p)*.5 + 1.0;
+        },
+
+        /**
+         * @property inBack
+         * @static
+         */
+        inBack: function(t, s) {
+            if (s === undefined) s = 1.70158;
+            return t*t*((s+1)*t - s);
+        },
+
+        /**
+         * @property outBack
+         * @static
+         */
+        outBack: function(t, s) {
+            if (s === undefined) s = 1.70158;
+            return ((--t)*t*((s+1)*t + s) + 1);
+        },
+
+        /**
+         * @property inOutBack
+         * @static
+         */
+        inOutBack: function(t, s) {
+            if (s === undefined) s = 1.70158;
+            if ((t/=.5) < 1) return .5*(t*t*(((s*=(1.525))+1)*t - s));
+            return .5*((t-=2)*t*(((s*=(1.525))+1)*t + s) + 2);
+        },
+
+        /**
+         * @property inBounce
+         * @static
+         */
+        inBounce: function(t) {
+            return 1.0 - Easing.outBounce(1.0-t);
+        },
+
+        /**
+         * @property outBounce
+         * @static
+         */
+        outBounce: function(t) {
+            if (t < (1/2.75)) {
+                return (7.5625*t*t);
+            } else if (t < (2/2.75)) {
+                return (7.5625*(t-=(1.5/2.75))*t + .75);
+            } else if (t < (2.5/2.75)) {
+                return (7.5625*(t-=(2.25/2.75))*t + .9375);
+            } else {
+                return (7.5625*(t-=(2.625/2.75))*t + .984375);
+            }
+        },
+
+        /**
+         * @property inOutBounce
+         * @static
+         */
+        inOutBounce: function(t) {
+            if (t < .5) return Easing.inBounce(t*2) * .5;
+            return Easing.outBounce(t*2-1.0) * .5 + .5;
+        }
+    };
+
+    module.exports = Easing;
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: david@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+define('famous/transitions/SnapTransition',['require','exports','module','famous/physics/PhysicsEngine','famous/physics/bodies/Particle','famous/physics/constraints/Snap','famous/math/Vector'],function(require, exports, module) {
+    var PE = require('famous/physics/PhysicsEngine');
+    var Particle = require('famous/physics/bodies/Particle');
+    var Spring = require('famous/physics/constraints/Snap');
+    var Vector = require('famous/math/Vector');
+
+    /**
+     * SnapTransition is a method of transitioning between two values (numbers,
+     * or arrays of numbers). It is similar to SpringTransition except
+     * the transition can be much faster and always has a damping effect.
+     *
+     * @class SnapTransition
+     * @constructor
+     *
+     * @param [state=0] {Number|Array} Initial state
+     */
+    function SnapTransition(state) {
+        state = state || 0;
+
+        this.endState  = new Vector(state);
+        this.initState = new Vector();
+
+        this._dimensions       = 1;
+        this._restTolerance    = 1e-10;
+        this._absRestTolerance = this._restTolerance;
+        this._callback         = undefined;
+
+        this.PE       = new PE();
+        this.particle = new Particle();
+        this.spring   = new Spring({anchor : this.endState});
+
+        this.PE.addBody(this.particle);
+        this.PE.attach(this.spring, this.particle);
+    }
+
+    SnapTransition.SUPPORTS_MULTIPLE = 3;
+
+    /**
+     * @property SnapTransition.DEFAULT_OPTIONS
+     * @type Object
+     * @protected
+     * @static
+     */
+    SnapTransition.DEFAULT_OPTIONS = {
+
+        /**
+         * The amount of time in milliseconds taken for one complete oscillation
+         * when there is no damping
+         *    Range : [0, Infinity]
+         *
+         * @attribute period
+         * @type Number
+         * @default 100
+         */
+        period : 100,
+
+        /**
+         * The damping of the snap.
+         *    Range : [0, 1]
+         *
+         * @attribute dampingRatio
+         * @type Number
+         * @default 0.2
+         */
+        dampingRatio : 0.2,
+
+        /**
+         * The initial velocity of the transition.
+         *
+         * @attribute velocity
+         * @type Number|Array
+         * @default 0
+         */
+        velocity : 0
+    };
+
+    function _getEnergy() {
+        return this.particle.getEnergy() + this.spring.getEnergy(this.particle);
+    }
+
+    function _setAbsoluteRestTolerance() {
+        var distance = this.endState.sub(this.initState).normSquared();
+        this._absRestTolerance = (distance === 0)
+            ? this._restTolerance
+            : this._restTolerance * distance;
+    }
+
+    function _setTarget(target) {
+        this.endState.set(target);
+        _setAbsoluteRestTolerance.call(this);
+    }
+
+    function _wake() {
+        this.PE.wake();
+    }
+
+    function _sleep() {
+        this.PE.sleep();
+    }
+
+    function _setParticlePosition(p) {
+        this.particle.position.set(p);
+    }
+
+    function _setParticleVelocity(v) {
+        this.particle.velocity.set(v);
+    }
+
+    function _getParticlePosition() {
+        return (this._dimensions === 0)
+            ? this.particle.getPosition1D()
+            : this.particle.getPosition();
+    }
+
+    function _getParticleVelocity() {
+        return (this._dimensions === 0)
+            ? this.particle.getVelocity1D()
+            : this.particle.getVelocity();
+    }
+
+    function _setCallback(callback) {
+        this._callback = callback;
+    }
+
+    function _setupDefinition(definition) {
+        var defaults = SnapTransition.DEFAULT_OPTIONS;
+        if (definition.period === undefined)       definition.period       = defaults.period;
+        if (definition.dampingRatio === undefined) definition.dampingRatio = defaults.dampingRatio;
+        if (definition.velocity === undefined)     definition.velocity     = defaults.velocity;
+
+        //setup spring
+        this.spring.setOptions({
+            period       : definition.period,
+            dampingRatio : definition.dampingRatio
+        });
+
+        //setup particle
+        _setParticleVelocity.call(this, definition.velocity);
+    }
+
+    function _update() {
+        if (this.PE.isSleeping()) {
+            if (this._callback) {
+                var cb = this._callback;
+                this._callback = undefined;
+                cb();
+            }
+            return;
+        }
+
+        if (_getEnergy.call(this) < this._absRestTolerance) {
+            _setParticlePosition.call(this, this.endState);
+            _setParticleVelocity.call(this, [0,0,0]);
+            _sleep.call(this);
+        }
+    }
+
+    /**
+     * Resets the state and velocity
+     *
+     * @method reset
+     *
+     * @param state {Number|Array}      State
+     * @param [velocity] {Number|Array} Velocity
+     */
+    SnapTransition.prototype.reset = function reset(state, velocity) {
+        this._dimensions = (state instanceof Array)
+            ? state.length
+            : 0;
+
+        this.initState.set(state);
+        _setParticlePosition.call(this, state);
+        _setTarget.call(this, state);
+        if (velocity) _setParticleVelocity.call(this, velocity);
+        _setCallback.call(this, undefined);
+    };
+
+    /**
+     * Getter for velocity
+     *
+     * @method getVelocity
+     *
+     * @return velocity {Number|Array}
+     */
+    SnapTransition.prototype.getVelocity = function getVelocity() {
+        return _getParticleVelocity.call(this);
+    };
+
+    /**
+     * Setter for velocity
+     *
+     * @method setVelocity
+     *
+     * @return velocity {Number|Array}
+     */
+    SnapTransition.prototype.setVelocity = function setVelocity(velocity) {
+        this.call(this, _setParticleVelocity(velocity));
+    };
+
+    /**
+     * Detects whether a transition is in progress
+     *
+     * @method isActive
+     *
+     * @return {Boolean}
+     */
+    SnapTransition.prototype.isActive = function isActive() {
+        return !this.PE.isSleeping();
+    };
+
+    /**
+     * Halt the transition
+     *
+     * @method halt
+     */
+    SnapTransition.prototype.halt = function halt() {
+        this.set(this.get());
+    };
+
+    /**
+     * Get the current position of the transition
+s     *
+     * @method get
+     *
+     * @return state {Number|Array}
+     */
+    SnapTransition.prototype.get = function get() {
+        _update.call(this);
+        return _getParticlePosition.call(this);
+    };
+
+    /**
+     * Set the end position and transition, with optional callback on completion.
+     *
+     * @method set
+     *
+     * @param state {Number|Array}      Final state
+     * @param [definition] {Object}     Transition definition
+     * @param [callback] {Function}     Callback
+     */
+    SnapTransition.prototype.set = function set(state, definition, callback) {
+        if (!definition) {
+            this.reset(state);
+            if (callback) callback();
+            return;
+        }
+
+        this._dimensions = (state instanceof Array)
+            ? state.length
+            : 0;
+
+        _wake.call(this);
+        _setupDefinition.call(this, definition);
+        _setTarget.call(this, state);
+        _setCallback.call(this, callback);
+    };
+
+    module.exports = SnapTransition;
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: david@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+/*global console*/
+
+define('famous/transitions/SpringTransition',['require','exports','module','famous/physics/PhysicsEngine','famous/physics/bodies/Particle','famous/physics/forces/Spring','famous/math/Vector'],function(require, exports, module) {
+    var PE = require('famous/physics/PhysicsEngine');
+    var Particle = require('famous/physics/bodies/Particle');
+    var Spring = require('famous/physics/forces/Spring');
+    var Vector = require('famous/math/Vector');
+
+    /**
+     * SpringTransition is a method of transitioning between two values (numbers,
+     * or arrays of numbers) with a bounce. The transition will overshoot the target
+     * state depending on the parameters of the transition.
+     *
+     * @class SpringTransition
+     * @constructor
+     *
+     * @param {Number|Array} [state=0] Initial state
+     */
+    function SpringTransition(state) {
+        state = state || 0;
+        this.endState  = new Vector(state);
+        this.initState = new Vector();
+
+        this._dimensions       = undefined;
+        this._restTolerance    = 1e-10;
+        this._absRestTolerance = this._restTolerance;
+        this._callback         = undefined;
+
+        this.PE       = new PE();
+        this.spring   = new Spring({anchor : this.endState});
+        this.particle = new Particle();
+
+        this.PE.addBody(this.particle);
+        this.PE.attach(this.spring, this.particle);
+    }
+
+    SpringTransition.SUPPORTS_MULTIPLE = 3;
+
+    /**
+     * @property SpringTransition.DEFAULT_OPTIONS
+     * @type Object
+     * @protected
+     * @static
+     */
+    SpringTransition.DEFAULT_OPTIONS = {
+
+        /**
+         * The amount of time in milliseconds taken for one complete oscillation
+         * when there is no damping
+         *    Range : [0, Infinity]
+         *
+         * @attribute period
+         * @type Number
+         * @default 300
+         */
+        period : 300,
+
+        /**
+         * The damping of the snap.
+         *    Range : [0, 1]
+         *    0 = no damping, and the spring will oscillate forever
+         *    1 = critically damped (the spring will never oscillate)
+         *
+         * @attribute dampingRatio
+         * @type Number
+         * @default 0.5
+         */
+        dampingRatio : 0.5,
+
+        /**
+         * The initial velocity of the transition.
+         *
+         * @attribute velocity
+         * @type Number|Array
+         * @default 0
+         */
+        velocity : 0
+    };
+
+    function _getEnergy() {
+        return this.particle.getEnergy() + this.spring.getEnergy(this.particle);
+    }
+
+    function _setParticlePosition(p) {
+        this.particle.setPosition(p);
+    }
+
+    function _setParticleVelocity(v) {
+        this.particle.setVelocity(v);
+    }
+
+    function _getParticlePosition() {
+        return (this._dimensions === 0)
+            ? this.particle.getPosition1D()
+            : this.particle.getPosition();
+    }
+
+    function _getParticleVelocity() {
+        return (this._dimensions === 0)
+            ? this.particle.getVelocity1D()
+            : this.particle.getVelocity();
+    }
+
+    function _setCallback(callback) {
+        this._callback = callback;
+    }
+
+    function _wake() {
+        this.PE.wake();
+    }
+
+    function _sleep() {
+        this.PE.sleep();
+    }
+
+    function _update() {
+        if (this.PE.isSleeping()) {
+            if (this._callback) {
+                var cb = this._callback;
+                this._callback = undefined;
+                cb();
+            }
+            return;
+        }
+
+        if (_getEnergy.call(this) < this._absRestTolerance) {
+            _setParticlePosition.call(this, this.endState);
+            _setParticleVelocity.call(this, [0,0,0]);
+            _sleep.call(this);
+        }
+    }
+
+    function _setupDefinition(definition) {
+        // TODO fix no-console error
+        /* eslint no-console: 0 */
+        var defaults = SpringTransition.DEFAULT_OPTIONS;
+        if (definition.period === undefined)       definition.period       = defaults.period;
+        if (definition.dampingRatio === undefined) definition.dampingRatio = defaults.dampingRatio;
+        if (definition.velocity === undefined)     definition.velocity     = defaults.velocity;
+
+        if (definition.period < 150) {
+            definition.period = 150;
+            console.warn('The period of a SpringTransition is capped at 150 ms. Use a SnapTransition for faster transitions');
+        }
+
+        //setup spring
+        this.spring.setOptions({
+            period       : definition.period,
+            dampingRatio : definition.dampingRatio
+        });
+
+        //setup particle
+        _setParticleVelocity.call(this, definition.velocity);
+    }
+
+    function _setAbsoluteRestTolerance() {
+        var distance = this.endState.sub(this.initState).normSquared();
+        this._absRestTolerance = (distance === 0)
+            ? this._restTolerance
+            : this._restTolerance * distance;
+    }
+
+    function _setTarget(target) {
+        this.endState.set(target);
+        _setAbsoluteRestTolerance.call(this);
+    }
+
+    /**
+     * Resets the position and velocity
+     *
+     * @method reset
+     *
+     * @param {Number|Array.Number} pos positional state
+     * @param {Number|Array} vel velocity
+     */
+    SpringTransition.prototype.reset = function reset(pos, vel) {
+        this._dimensions = (pos instanceof Array)
+            ? pos.length
+            : 0;
+
+        this.initState.set(pos);
+        _setParticlePosition.call(this, pos);
+        _setTarget.call(this, pos);
+        if (vel) _setParticleVelocity.call(this, vel);
+        _setCallback.call(this, undefined);
+    };
+
+    /**
+     * Getter for velocity
+     *
+     * @method getVelocity
+     *
+     * @return {Number|Array} velocity
+     */
+    SpringTransition.prototype.getVelocity = function getVelocity() {
+        return _getParticleVelocity.call(this);
+    };
+
+    /**
+     * Setter for velocity
+     *
+     * @method setVelocity
+     *
+     * @return {Number|Array} velocity
+     */
+    SpringTransition.prototype.setVelocity = function setVelocity(v) {
+        this.call(this, _setParticleVelocity(v));
+    };
+
+    /**
+     * Detects whether a transition is in progress
+     *
+     * @method isActive
+     *
+     * @return {Boolean}
+     */
+    SpringTransition.prototype.isActive = function isActive() {
+        return !this.PE.isSleeping();
+    };
+
+    /**
+     * Halt the transition
+     *
+     * @method halt
+     */
+    SpringTransition.prototype.halt = function halt() {
+        this.set(this.get());
+    };
+
+    /**
+     * Get the current position of the transition
+     *
+     * @method get
+     *
+     * @return {Number|Array} state
+     */
+    SpringTransition.prototype.get = function get() {
+        _update.call(this);
+        return _getParticlePosition.call(this);
+    };
+
+    /**
+     * Set the end position and transition, with optional callback on completion.
+     *
+     * @method set
+     *
+     * @param  {Number|Array} endState Final state
+     * @param {Object}  definition  Transition definition
+     * @param  {Function} callback Callback
+     */
+    SpringTransition.prototype.set = function set(endState, definition, callback) {
+        if (!definition) {
+            this.reset(endState);
+            if (callback) callback();
+            return;
+        }
+
+        this._dimensions = (endState instanceof Array)
+            ? endState.length
+            : 0;
+
+        _wake.call(this);
+        _setupDefinition.call(this, definition);
+        _setTarget.call(this, endState);
+        _setCallback.call(this, callback);
+    };
+
+    module.exports = SpringTransition;
+
+
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ *
+ * Owner: david@famo.us
+ * @license MPL 2.0
+ * @copyright Famous Industries, Inc. 2014
+ */
+
+define('famous/transitions/WallTransition',['require','exports','module','famous/physics/PhysicsEngine','famous/physics/bodies/Particle','famous/physics/forces/Spring','famous/physics/constraints/Wall','famous/math/Vector'],function(require, exports, module) {
+    var PE = require('famous/physics/PhysicsEngine');
+    var Particle = require('famous/physics/bodies/Particle');
+    var Spring = require('famous/physics/forces/Spring');
+    var Wall = require('famous/physics/constraints/Wall');
+    var Vector = require('famous/math/Vector');
+
+    /**
+     * WallTransition is a method of transitioning between two values (numbers,
+     *   or arrays of numbers) with a bounce. Unlike a SpringTransition
+     *   The transition will not overshoot the target, but bounce back against it.
+     *   The behavior of the bounce is specified by the transition options.
+     *
+     * @class WallTransition
+     * @constructor
+     *
+     * @param {Number|Array} [state=0] Initial state
+     */
+    function WallTransition(state) {
+        state = state || 0;
+
+        this.endState  = new Vector(state);
+        this.initState = new Vector();
+
+        this.spring = new Spring({anchor : this.endState});
+        this.wall   = new Wall();
+
+        this._restTolerance = 1e-10;
+        this._dimensions = 1;
+        this._absRestTolerance = this._restTolerance;
+        this._callback = undefined;
+
+        this.PE = new PE();
+        this.particle = new Particle();
+
+        this.PE.addBody(this.particle);
+        this.PE.attach([this.wall, this.spring], this.particle);
+    }
+
+    WallTransition.SUPPORTS_MULTIPLE = 3;
+
+    /**
+     * @property WallTransition.DEFAULT_OPTIONS
+     * @type Object
+     * @protected
+     * @static
+     */
+    WallTransition.DEFAULT_OPTIONS = {
+
+        /**
+         * The amount of time in milliseconds taken for one complete oscillation
+         * when there is no damping
+         *    Range : [0, Infinity]
+         *
+         * @attribute period
+         * @type Number
+         * @default 300
+         */
+        period : 300,
+
+        /**
+         * The damping of the snap.
+         *    Range : [0, 1]
+         *    0 = no damping, and the spring will oscillate forever
+         *    1 = critically damped (the spring will never oscillate)
+         *
+         * @attribute dampingRatio
+         * @type Number
+         * @default 0.5
+         */
+        dampingRatio : 0.5,
+
+        /**
+         * The initial velocity of the transition.
+         *
+         * @attribute velocity
+         * @type Number|Array
+         * @default 0
+         */
+        velocity : 0,
+
+        /**
+         * The percentage of momentum transferred to the wall
+         *
+         * @attribute restitution
+         * @type Number
+         * @default 0.5
+         */
+        resitution : 0.5
+    };
+
+    function _getEnergy() {
+        return this.particle.getEnergy() + this.spring.getEnergy(this.particle);
+    }
+
+    function _setAbsoluteRestTolerance() {
+        var distance = this.endState.sub(this.initState).normSquared();
+        this._absRestTolerance = (distance === 0)
+            ? this._restTolerance
+            : this._restTolerance * distance;
+    }
+
+    function _wake() {
+        this.PE.wake();
+    }
+
+    function _sleep() {
+        this.PE.sleep();
+    }
+
+    function _setTarget(target) {
+        this.endState.set(target);
+
+        var dist = this.endState.sub(this.initState).norm();
+
+        this.wall.setOptions({
+            distance : this.endState.norm(),
+            normal : (dist === 0)
+                ? this.particle.velocity.normalize(-1)
+                : this.endState.sub(this.initState).normalize(-1)
+        });
+
+        _setAbsoluteRestTolerance.call(this);
+    }
+
+    function _setParticlePosition(p) {
+        this.particle.position.set(p);
+    }
+
+    function _setParticleVelocity(v) {
+        this.particle.velocity.set(v);
+    }
+
+    function _getParticlePosition() {
+        return (this._dimensions === 0)
+            ? this.particle.getPosition1D()
+            : this.particle.getPosition();
+    }
+
+    function _getParticleVelocity() {
+        return (this._dimensions === 0)
+            ? this.particle.getVelocity1D()
+            : this.particle.getVelocity();
+    }
+
+    function _setCallback(callback) {
+        this._callback = callback;
+    }
+
+    function _update() {
+        if (this.PE.isSleeping()) {
+            if (this._callback) {
+                var cb = this._callback;
+                this._callback = undefined;
+                cb();
+            }
+            return;
+        }
+        var energy = _getEnergy.call(this);
+        if (energy < this._absRestTolerance) {
+            _sleep.call(this);
+            _setParticlePosition.call(this, this.endState);
+            _setParticleVelocity.call(this, [0,0,0]);
+        }
+    }
+
+    function _setupDefinition(def) {
+        var defaults = WallTransition.DEFAULT_OPTIONS;
+        if (def.period === undefined) def.period = defaults.period;
+        if (def.dampingRatio === undefined) def.dampingRatio = defaults.dampingRatio;
+        if (def.velocity === undefined) def.velocity = defaults.velocity;
+        if (def.restitution === undefined) def.restitution = defaults.restitution;
+
+        //setup spring
+        this.spring.setOptions({
+            period : def.period,
+            dampingRatio : def.dampingRatio
+        });
+
+        //setup wall
+        this.wall.setOptions({
+            restitution : def.restitution
+        });
+
+        //setup particle
+        _setParticleVelocity.call(this, def.velocity);
+    }
+
+    /**
+     * Resets the state and velocity
+     *
+     * @method reset
+     *
+     * @param {Number|Array}  state     State
+     * @param  {Number|Array} [velocity] Velocity
+     */
+    WallTransition.prototype.reset = function reset(state, velocity) {
+        this._dimensions = (state instanceof Array)
+            ? state.length
+            : 0;
+
+        this.initState.set(state);
+        _setParticlePosition.call(this, state);
+        if (velocity) _setParticleVelocity.call(this, velocity);
+        _setTarget.call(this, state);
+        _setCallback.call(this, undefined);
+    };
+
+    /**
+     * Getter for velocity
+     *
+     * @method getVelocity
+     *
+     * @return velocity {Number|Array}
+     */
+    WallTransition.prototype.getVelocity = function getVelocity() {
+        return _getParticleVelocity.call(this);
+    };
+
+    /**
+     * Setter for velocity
+     *
+     * @method setVelocity
+     *
+     * @return velocity {Number|Array}
+     */
+    WallTransition.prototype.setVelocity = function setVelocity(velocity) {
+        this.call(this, _setParticleVelocity(velocity));
+    };
+
+    /**
+     * Detects whether a transition is in progress
+     *
+     * @method isActive
+     *
+     * @return {Boolean}
+     */
+    WallTransition.prototype.isActive = function isActive() {
+        return !this.PE.isSleeping();
+    };
+
+    /**
+     * Halt the transition
+     *
+     * @method halt
+     */
+    WallTransition.prototype.halt = function halt() {
+        this.set(this.get());
+    };
+
+    /**
+     * Getter
+     *
+     * @method get
+     *
+     * @return state {Number|Array}
+     */
+    WallTransition.prototype.get = function get() {
+        _update.call(this);
+        return _getParticlePosition.call(this);
+    };
+
+    /**
+     * Set the end position and transition, with optional callback on completion.
+     *
+     * @method set
+     *
+     * @param state {Number|Array}      Final state
+     * @param [definition] {Object}     Transition definition
+     * @param [callback] {Function}     Callback
+     */
+    WallTransition.prototype.set = function set(state, definition, callback) {
+        if (!definition) {
+            this.reset(state);
+            if (callback) callback();
+            return;
+        }
+
+        this._dimensions = (state instanceof Array)
+            ? state.length
+            : 0;
+
+        _wake.call(this);
+        _setupDefinition.call(this, definition);
+        _setTarget.call(this, state);
+        _setCallback.call(this, callback);
+    };
+
+    module.exports = WallTransition;
 
 
 /* This Source Code Form is subject to the terms of the Mozilla Public
@@ -14280,123 +16140,6 @@ define('famous/views/Lightbox',['require','exports','module','famous/core/Transf
     module.exports = Lightbox;
 
 
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: david@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/physics/forces/Drag',['require','exports','module','./Force'],function(require, exports, module) {
-    var Force = require('./Force');
-
-    /**
-     * Drag is a force that opposes velocity. Attach it to the physics engine
-     * to slow down a physics body in motion.
-     *
-     * @class Drag
-     * @constructor
-     * @extends Force
-     * @param {Object} options options to set on drag
-     */
-    function Drag(options) {
-        this.options = Object.create(this.constructor.DEFAULT_OPTIONS);
-        if (options) this.setOptions(options);
-
-        Force.call(this);
-    }
-
-    Drag.prototype = Object.create(Force.prototype);
-    Drag.prototype.constructor = Drag;
-
-    /**
-     * @property Drag.FORCE_FUNCTIONS
-     * @type Object
-     * @protected
-     * @static
-     */
-    Drag.FORCE_FUNCTIONS = {
-
-        /**
-         * A drag force proportional to the velocity
-         * @attribute LINEAR
-         * @type Function
-         * @param {Vector} velocity
-         * @return {Vector} drag force
-         */
-        LINEAR : function(velocity) {
-            return velocity;
-        },
-
-        /**
-         * A drag force proportional to the square of the velocity
-         * @attribute QUADRATIC
-         * @type Function
-         * @param {Vector} velocity
-         * @return {Vector} drag force
-         */
-        QUADRATIC : function(velocity) {
-            return velocity.mult(velocity.norm());
-        }
-    };
-
-    /**
-     * @property Drag.DEFAULT_OPTIONS
-     * @type Object
-     * @protected
-     * @static
-     */
-    Drag.DEFAULT_OPTIONS = {
-
-        /**
-         * The strength of the force
-         *    Range : [0, 0.1]
-         * @attribute strength
-         * @type Number
-         * @default 0.01
-         */
-        strength : 0.01,
-
-        /**
-         * The type of opposing force
-         * @attribute forceFunction
-         * @type Function
-         */
-        forceFunction : Drag.FORCE_FUNCTIONS.LINEAR
-    };
-
-    /**
-     * Adds a drag force to a physics body's force accumulator.
-     *
-     * @method applyForce
-     * @param targets {Array.Body} Array of bodies to apply drag force to.
-     */
-    Drag.prototype.applyForce = function applyForce(targets) {
-        var strength        = this.options.strength;
-        var forceFunction   = this.options.forceFunction;
-        var force           = this.force;
-        for (var index = 0; index < targets.length; index++) {
-            var particle = targets[index];
-            forceFunction(particle.velocity).mult(-strength).put(force);
-            particle.applyForce(force);
-        }
-    };
-
-    /**
-     * Basic options setter
-     *
-     * @method setOptions
-     * @param {Objects} options
-     */
-    Drag.prototype.setOptions = function setOptions(options) {
-        for (var key in options) this.options[key] = options[key];
-    };
-
-    module.exports = Drag;
-
-
 define('famous/views/Scroller',['require','exports','module','famous/core/Entity','famous/core/Group','famous/core/OptionsManager','famous/core/Transform','famous/utilities/Utility','famous/core/ViewSequence','famous/core/EventHandler'],function(require, exports, module) {
     var Entity = require('famous/core/Entity');
     var Group = require('famous/core/Group');
@@ -15865,1745 +17608,5 @@ define('famous/widgets/TabBar',['require','exports','module','famous/utilities/U
     };
 
     module.exports = TabBar;
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: david@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/physics/bodies/Body',['require','exports','module','./Particle','famous/core/Transform','famous/math/Vector','famous/math/Quaternion','famous/math/Matrix'],function(require, exports, module) {
-    var Particle = require('./Particle');
-    var Transform = require('famous/core/Transform');
-    var Vector = require('famous/math/Vector');
-    var Quaternion = require('famous/math/Quaternion');
-    var Matrix = require('famous/math/Matrix');
-
-    /**
-     * A unit controlled by the physics engine which extends the zero-dimensional
-     * Particle to include geometry. In addition to maintaining the state
-     * of a Particle its state includes orientation, angular velocity
-     * and angular momentum and responds to torque forces.
-     *
-     * @class Body
-     * @extends Particle
-     * @constructor
-     */
-    function Body(options) {
-        Particle.call(this, options);
-        options = options || {};
-
-        this.orientation     = new Quaternion();
-        this.angularVelocity = new Vector();
-        this.angularMomentum = new Vector();
-        this.torque          = new Vector();
-
-        if (options.orientation)     this.orientation.set(options.orientation);
-        if (options.angularVelocity) this.angularVelocity.set(options.angularVelocity);
-        if (options.angularMomentum) this.angularMomentum.set(options.angularMomentum);
-        if (options.torque)          this.torque.set(options.torque);
-
-        this.setMomentsOfInertia();
-
-        this.angularVelocity.w = 0;        //quaternify the angular velocity
-
-        //registers
-        this.pWorld = new Vector();        //placeholder for world space position
-    }
-
-    Body.DEFAULT_OPTIONS = Particle.DEFAULT_OPTIONS;
-    Body.DEFAULT_OPTIONS.orientation = [0,0,0,1];
-    Body.DEFAULT_OPTIONS.angularVelocity = [0,0,0];
-
-    Body.AXES = Particle.AXES;
-    Body.SLEEP_TOLERANCE = Particle.SLEEP_TOLERANCE;
-    Body.INTEGRATOR = Particle.INTEGRATOR;
-
-    Body.prototype = Object.create(Particle.prototype);
-    Body.prototype.constructor = Body;
-
-    Body.prototype.isBody = true;
-
-    Body.prototype.setMass = function setMass() {
-        Particle.prototype.setMass.apply(this, arguments);
-        this.setMomentsOfInertia();
-    };
-
-    /**
-     * Setter for moment of inertia, which is necessary to give proper
-     * angular inertia depending on the geometry of the body.
-     *
-     * @method setMomentsOfInertia
-     */
-    Body.prototype.setMomentsOfInertia = function setMomentsOfInertia() {
-        this.inertia = new Matrix();
-        this.inverseInertia = new Matrix();
-    };
-
-    /**
-     * Update the angular velocity from the angular momentum state.
-     *
-     * @method updateAngularVelocity
-     */
-    Body.prototype.updateAngularVelocity = function updateAngularVelocity() {
-        this.angularVelocity.set(this.inverseInertia.vectorMultiply(this.angularMomentum));
-    };
-
-    /**
-     * Determine world coordinates from the local coordinate system. Useful
-     * if the Body has rotated in space.
-     *
-     * @method toWorldCoordinates
-     * @param localPosition {Vector} local coordinate vector
-     * @return global coordinate vector {Vector}
-     */
-    Body.prototype.toWorldCoordinates = function toWorldCoordinates(localPosition) {
-        return this.pWorld.set(this.orientation.rotateVector(localPosition));
-    };
-
-    /**
-     * Calculates the kinetic and intertial energy of a body.
-     *
-     * @method getEnergy
-     * @return energy {Number}
-     */
-    Body.prototype.getEnergy = function getEnergy() {
-        return Particle.prototype.getEnergy.call(this)
-            + 0.5 * this.inertia.vectorMultiply(this.angularVelocity).dot(this.angularVelocity);
-    };
-
-    /**
-     * Extends Particle.reset to reset orientation, angular velocity
-     * and angular momentum.
-     *
-     * @method reset
-     * @param [p] {Array|Vector} position
-     * @param [v] {Array|Vector} velocity
-     * @param [q] {Array|Quaternion} orientation
-     * @param [L] {Array|Vector} angular momentum
-     */
-    Body.prototype.reset = function reset(p, v, q, L) {
-        Particle.prototype.reset.call(this, p, v);
-        this.angularVelocity.clear();
-        this.setOrientation(q || [1,0,0,0]);
-        this.setAngularMomentum(L || [0,0,0]);
-    };
-
-    /**
-     * Setter for orientation
-     *
-     * @method setOrientation
-     * @param q {Array|Quaternion} orientation
-     */
-    Body.prototype.setOrientation = function setOrientation(q) {
-        this.orientation.set(q);
-    };
-
-    /**
-     * Setter for angular velocity
-     *
-     * @method setAngularVelocity
-     * @param w {Array|Vector} angular velocity
-     */
-    Body.prototype.setAngularVelocity = function setAngularVelocity(w) {
-        this.wake();
-        this.angularVelocity.set(w);
-    };
-
-    /**
-     * Setter for angular momentum
-     *
-     * @method setAngularMomentum
-     * @param L {Array|Vector} angular momentum
-     */
-    Body.prototype.setAngularMomentum = function setAngularMomentum(L) {
-        this.wake();
-        this.angularMomentum.set(L);
-    };
-
-    /**
-     * Extends Particle.applyForce with an optional argument
-     * to apply the force at an off-centered location, resulting in a torque.
-     *
-     * @method applyForce
-     * @param force {Vector} force
-     * @param [location] {Vector} off-center location on the body
-     */
-    Body.prototype.applyForce = function applyForce(force, location) {
-        Particle.prototype.applyForce.call(this, force);
-        if (location !== undefined) this.applyTorque(location.cross(force));
-    };
-
-    /**
-     * Applied a torque force to a body, inducing a rotation.
-     *
-     * @method applyTorque
-     * @param torque {Vector} torque
-     */
-    Body.prototype.applyTorque = function applyTorque(torque) {
-        this.wake();
-        this.torque.set(this.torque.add(torque));
-    };
-
-    /**
-     * Extends Particle.getTransform to include a rotational component
-     * derived from the particle's orientation.
-     *
-     * @method getTransform
-     * @return transform {Transform}
-     */
-    Body.prototype.getTransform = function getTransform() {
-        return Transform.thenMove(
-            this.orientation.getTransform(),
-            Transform.getTranslate(Particle.prototype.getTransform.call(this))
-        );
-    };
-
-    /**
-     * Extends Particle._integrate to also update the rotational states
-     * of the body.
-     *
-     * @method getTransform
-     * @protected
-     * @param dt {Number} delta time
-     */
-    Body.prototype._integrate = function _integrate(dt) {
-        Particle.prototype._integrate.call(this, dt);
-        this.integrateAngularMomentum(dt);
-        this.updateAngularVelocity(dt);
-        this.integrateOrientation(dt);
-    };
-
-    /**
-     * Updates the angular momentum via the its integrator.
-     *
-     * @method integrateAngularMomentum
-     * @param dt {Number} delta time
-     */
-    Body.prototype.integrateAngularMomentum = function integrateAngularMomentum(dt) {
-        Body.INTEGRATOR.integrateAngularMomentum(this, dt);
-    };
-
-    /**
-     * Updates the orientation via the its integrator.
-     *
-     * @method integrateOrientation
-     * @param dt {Number} delta time
-     */
-    Body.prototype.integrateOrientation = function integrateOrientation(dt) {
-        Body.INTEGRATOR.integrateOrientation(this, dt);
-    };
-
-    module.exports = Body;
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: david@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/physics/bodies/Circle',['require','exports','module','./Body','famous/math/Matrix'],function(require, exports, module) {
-    var Body = require('./Body');
-    var Matrix = require('famous/math/Matrix');
-
-    /**
-     * Implements a circle, or spherical, geometry for an Body with
-     * radius.
-     *
-     * @class Circle
-     * @extends Body
-     * @constructor
-     */
-    function Circle(options) {
-        options = options || {};
-        this.setRadius(options.radius || 0);
-        Body.call(this, options);
-    }
-
-    Circle.prototype = Object.create(Body.prototype);
-    Circle.prototype.constructor = Circle;
-
-    /**
-     * Basic setter for radius.
-     * @method setRadius
-     * @param r {Number} radius
-     */
-    Circle.prototype.setRadius = function setRadius(r) {
-        this.radius = r;
-        this.size = [2*this.radius, 2*this.radius];
-        this.setMomentsOfInertia();
-    };
-
-    Circle.prototype.setMomentsOfInertia = function setMomentsOfInertia() {
-        var m = this.mass;
-        var r = this.radius;
-
-        this.inertia = new Matrix([
-            [0.25 * m * r * r, 0, 0],
-            [0, 0.25 * m * r * r, 0],
-            [0, 0, 0.5 * m * r * r]
-        ]);
-
-        this.inverseInertia = new Matrix([
-            [4 / (m * r * r), 0, 0],
-            [0, 4 / (m * r * r), 0],
-            [0, 0, 2 / (m * r * r)]
-        ]);
-    };
-
-    module.exports = Circle;
-
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: david@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/physics/bodies/Rectangle',['require','exports','module','./Body','famous/math/Matrix'],function(require, exports, module) {
-    var Body = require('./Body');
-    var Matrix = require('famous/math/Matrix');
-
-    /**
-     * Implements a rectangular geometry for an Body with
-     * size = [width, height].
-     *
-     * @class Rectangle
-     * @extends Body
-     * @constructor
-     */
-    function Rectangle(options) {
-        options = options || {};
-        this.size = options.size || [0,0];
-        Body.call(this, options);
-    }
-
-    Rectangle.prototype = Object.create(Body.prototype);
-    Rectangle.prototype.constructor = Rectangle;
-
-    /**
-     * Basic setter for size.
-     * @method setSize
-     * @param size {Array} size = [width, height]
-     */
-    Rectangle.prototype.setSize = function setSize(size) {
-        this.size = size;
-        this.setMomentsOfInertia();
-    };
-
-    Rectangle.prototype.setMomentsOfInertia = function setMomentsOfInertia() {
-        var m = this.mass;
-        var w = this.size[0];
-        var h = this.size[1];
-
-        this.inertia = new Matrix([
-            [m * h * h / 12, 0, 0],
-            [0, m * w * w / 12, 0],
-            [0, 0, m * (w * w + h * h) / 12]
-        ]);
-
-        this.inverseInertia = new Matrix([
-            [12 / (m * h * h), 0, 0],
-            [0, 12 / (m * w * w), 0],
-            [0, 0, 12 / (m * (w * w + h * h))]
-        ]);
-    };
-
-    module.exports = Rectangle;
-
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: david@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/physics/constraints/Collision',['require','exports','module','./Constraint','famous/math/Vector'],function(require, exports, module) {
-    var Constraint = require('./Constraint');
-    var Vector = require('famous/math/Vector');
-
-    /**
-     *  Allows for two circular bodies to collide and bounce off each other.
-     *
-     *  @class Collision
-     *  @constructor
-     *  @extends Constraint
-     *  @param {Options} [options] An object of configurable options.
-     *  @param {Number} [options.restitution] The energy ratio lost in a collision (0 = stick, 1 = elastic) Range : [0, 1]
-     *  @param {Number} [options.drift] Baumgarte stabilization parameter. Makes constraints "loosely" (0) or "tightly" (1) enforced. Range : [0, 1]
-     *  @param {Number} [options.slop] Amount of penetration in pixels to ignore before collision event triggers
-     *
-     */
-    function Collision(options) {
-        this.options = Object.create(Collision.DEFAULT_OPTIONS);
-        if (options) this.setOptions(options);
-
-        //registers
-        this.normal   = new Vector();
-        this.pDiff    = new Vector();
-        this.vDiff    = new Vector();
-        this.impulse1 = new Vector();
-        this.impulse2 = new Vector();
-
-        Constraint.call(this);
-    }
-
-    Collision.prototype = Object.create(Constraint.prototype);
-    Collision.prototype.constructor = Collision;
-
-    Collision.DEFAULT_OPTIONS = {
-        restitution : 0.5,
-        drift : 0.5,
-        slop : 0
-    };
-
-    function _normalVelocity(particle1, particle2) {
-        return particle1.velocity.dot(particle2.velocity);
-    }
-
-    /*
-     * Setter for options.
-     *
-     * @method setOptions
-     * @param options {Objects}
-     */
-    Collision.prototype.setOptions = function setOptions(options) {
-        for (var key in options) this.options[key] = options[key];
-    };
-
-    /**
-     * Adds an impulse to a physics body's velocity due to the constraint
-     *
-     * @method applyConstraint
-     * @param targets {Array.Body}  Array of bodies to apply the constraint to
-     * @param source {Body}         The source of the constraint
-     * @param dt {Number}           Delta time
-     */
-    Collision.prototype.applyConstraint = function applyConstraint(targets, source, dt) {
-        if (source === undefined) return;
-
-        var v1 = source.velocity;
-        var p1 = source.position;
-        var w1 = source.inverseMass;
-        var r1 = source.radius;
-
-        var options = this.options;
-        var drift = options.drift;
-        var slop = -options.slop;
-        var restitution = options.restitution;
-
-        var n     = this.normal;
-        var pDiff = this.pDiff;
-        var vDiff = this.vDiff;
-        var impulse1 = this.impulse1;
-        var impulse2 = this.impulse2;
-
-        for (var i = 0; i < targets.length; i++) {
-            var target = targets[i];
-
-            if (target === source) continue;
-
-            var v2 = target.velocity;
-            var p2 = target.position;
-            var w2 = target.inverseMass;
-            var r2 = target.radius;
-
-            pDiff.set(p2.sub(p1));
-            vDiff.set(v2.sub(v1));
-
-            var dist    = pDiff.norm();
-            var overlap = dist - (r1 + r2);
-            var effMass = 1/(w1 + w2);
-            var gamma   = 0;
-
-            if (overlap < 0) {
-
-                n.set(pDiff.normalize());
-
-                if (this._eventOutput) {
-                    var collisionData = {
-                        target  : target,
-                        source  : source,
-                        overlap : overlap,
-                        normal  : n
-                    };
-
-                    this._eventOutput.emit('preCollision', collisionData);
-                    this._eventOutput.emit('collision', collisionData);
-                }
-
-                var lambda = (overlap <= slop)
-                    ? ((1 + restitution) * n.dot(vDiff) + drift/dt * (overlap - slop)) / (gamma + dt/effMass)
-                    : ((1 + restitution) * n.dot(vDiff)) / (gamma + dt/effMass);
-
-                n.mult(dt*lambda).put(impulse1);
-                impulse1.mult(-1).put(impulse2);
-
-                source.applyImpulse(impulse1);
-                target.applyImpulse(impulse2);
-
-                //source.setPosition(p1.add(n.mult(overlap/2)));
-                //target.setPosition(p2.sub(n.mult(overlap/2)));
-
-                if (this._eventOutput) this._eventOutput.emit('postCollision', collisionData);
-
-            }
-        }
-    };
-
-    module.exports = Collision;
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: david@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/physics/constraints/Curve',['require','exports','module','./Constraint','famous/math/Vector'],function(require, exports, module) {
-    var Constraint = require('./Constraint');
-    var Vector = require('famous/math/Vector');
-
-    /**
-     *  A constraint that keeps a physics body on a given implicit curve
-     *    regardless of other physical forces are applied to it.
-     *
-     *    A curve constraint is two surface constraints in disguise, as a curve is
-     *    the intersection of two surfaces, and is essentially constrained to both
-     *
-     *  @class Curve
-     *  @constructor
-     *  @extends Constraint
-     *  @param {Options} [options] An object of configurable options.
-     *  @param {Function} [options.equation] An implicitly defined surface f(x,y,z) = 0 that body is constrained to e.g. function(x,y,z) { x*x + y*y - r*r } corresponds to a circle of radius r pixels
-     *  @param {Function} [options.plane] An implicitly defined second surface that the body is constrained to
-     *  @param {Number} [options.period] The spring-like reaction when the constraint is violated
-     *  @param {Number} [options.number] The damping-like reaction when the constraint is violated
-     */
-    function Curve(options) {
-        this.options = Object.create(Curve.DEFAULT_OPTIONS);
-        if (options) this.setOptions(options);
-
-        //registers
-        this.J = new Vector();
-        this.impulse = new Vector();
-
-        Constraint.call(this);
-    }
-
-    Curve.prototype = Object.create(Constraint.prototype);
-    Curve.prototype.constructor = Curve;
-
-    /** @const */ var epsilon = 1e-7;
-    /** @const */ var pi = Math.PI;
-
-    Curve.DEFAULT_OPTIONS = {
-        equation  : function(x,y,z) {
-            return 0;
-        },
-        plane : function(x,y,z) {
-            return z;
-        },
-        period : 0,
-        dampingRatio : 0
-    };
-
-    /**
-     * Basic options setter
-     *
-     * @method setOptions
-     * @param options {Objects}
-     */
-    Curve.prototype.setOptions = function setOptions(options) {
-        for (var key in options) this.options[key] = options[key];
-    };
-
-    /**
-     * Adds a curve impulse to a physics body.
-     *
-     * @method applyConstraint
-     * @param targets {Array.Body} Array of bodies to apply force to.
-     * @param source {Body} Not applicable
-     * @param dt {Number} Delta time
-     */
-    Curve.prototype.applyConstraint = function applyConstraint(targets, source, dt) {
-        var options = this.options;
-        var impulse = this.impulse;
-        var J = this.J;
-
-        var f = options.equation;
-        var g = options.plane;
-        var dampingRatio = options.dampingRatio;
-        var period = options.period;
-
-        for (var i = 0; i < targets.length; i++) {
-            var body = targets[i];
-
-            var v = body.velocity;
-            var p = body.position;
-            var m = body.mass;
-
-            var gamma;
-            var beta;
-
-            if (period === 0) {
-                gamma = 0;
-                beta = 1;
-            }
-            else {
-                var c = 4 * m * pi * dampingRatio / period;
-                var k = 4 * m * pi * pi / (period * period);
-
-                gamma = 1 / (c + dt*k);
-                beta  = dt*k / (c + dt*k);
-            }
-
-            var x = p.x;
-            var y = p.y;
-            var z = p.z;
-
-            var f0  = f(x, y, z);
-            var dfx = (f(x + epsilon, p, p) - f0) / epsilon;
-            var dfy = (f(x, y + epsilon, p) - f0) / epsilon;
-            var dfz = (f(x, y, p + epsilon) - f0) / epsilon;
-
-            var g0  = g(x, y, z);
-            var dgx = (g(x + epsilon, y, z) - g0) / epsilon;
-            var dgy = (g(x, y + epsilon, z) - g0) / epsilon;
-            var dgz = (g(x, y, z + epsilon) - g0) / epsilon;
-
-            J.setXYZ(dfx + dgx, dfy + dgy, dfz + dgz);
-
-            var antiDrift = beta/dt * (f0 + g0);
-            var lambda = -(J.dot(v) + antiDrift) / (gamma + dt * J.normSquared() / m);
-
-            impulse.set(J.mult(dt*lambda));
-            body.applyImpulse(impulse);
-        }
-    };
-
-    module.exports = Curve;
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: david@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/physics/constraints/Distance',['require','exports','module','./Constraint','famous/math/Vector'],function(require, exports, module) {
-    var Constraint = require('./Constraint');
-    var Vector = require('famous/math/Vector');
-
-    /**
-     *  A constraint that keeps a physics body a given distance away from a given
-     *  anchor, or another attached body.
-     *
-     *
-     *  @class Distance
-     *  @constructor
-     *  @extends Constraint
-     *  @param {Options} [options] An object of configurable options.
-     *  @param {Array} [options.anchor] The location of the anchor
-     *  @param {Number} [options.length] The amount of distance from the anchor the constraint should enforce
-     *  @param {Number} [options.minLength] The minimum distance before the constraint is activated. Use this property for a "rope" effect.
-     *  @param {Number} [options.period] The spring-like reaction when the constraint is broken.
-     *  @param {Number} [options.dampingRatio] The damping-like reaction when the constraint is broken.
-     *
-     */
-    function Distance(options) {
-        this.options = Object.create(this.constructor.DEFAULT_OPTIONS);
-        if (options) this.setOptions(options);
-
-        //registers
-        this.impulse  = new Vector();
-        this.normal   = new Vector();
-        this.diffP    = new Vector();
-        this.diffV    = new Vector();
-
-        Constraint.call(this);
-    }
-
-    Distance.prototype = Object.create(Constraint.prototype);
-    Distance.prototype.constructor = Distance;
-
-    Distance.DEFAULT_OPTIONS = {
-        anchor : null,
-        length : 0,
-        minLength : 0,
-        period : 0,
-        dampingRatio : 0
-    };
-
-    /** @const */ var pi = Math.PI;
-
-    /**
-     * Basic options setter
-     *
-     * @method setOptions
-     * @param options {Objects}
-     */
-    Distance.prototype.setOptions = function setOptions(options) {
-        if (options.anchor) {
-            if (options.anchor.position instanceof Vector) this.options.anchor = options.anchor.position;
-            if (options.anchor   instanceof Vector)  this.options.anchor = options.anchor;
-            if (options.anchor   instanceof Array)  this.options.anchor = new Vector(options.anchor);
-        }
-        if (options.length !== undefined) this.options.length = options.length;
-        if (options.dampingRatio !== undefined) this.options.dampingRatio = options.dampingRatio;
-        if (options.period !== undefined) this.options.period = options.period;
-        if (options.minLength !== undefined) this.options.minLength = options.minLength;
-    };
-
-    function _calcError(impulse, body) {
-        return body.mass * impulse.norm();
-    }
-
-    /**
-     * Set the anchor position
-     *
-     * @method setOptions
-     * @param anchor {Array}
-     */
-    Distance.prototype.setAnchor = function setAnchor(anchor) {
-        if (!this.options.anchor) this.options.anchor = new Vector();
-        this.options.anchor.set(anchor);
-    };
-
-    /**
-     * Adds an impulse to a physics body's velocity due to the constraint
-     *
-     * @method applyConstraint
-     * @param targets {Array.Body}  Array of bodies to apply the constraint to
-     * @param source {Body}         The source of the constraint
-     * @param dt {Number}           Delta time
-     */
-    Distance.prototype.applyConstraint = function applyConstraint(targets, source, dt) {
-        var n        = this.normal;
-        var diffP    = this.diffP;
-        var diffV    = this.diffV;
-        var impulse  = this.impulse;
-        var options  = this.options;
-
-        var dampingRatio = options.dampingRatio;
-        var period       = options.period;
-        var minLength    = options.minLength;
-
-        var p2;
-        var w2;
-
-        if (source) {
-            var v2 = source.velocity;
-            p2 = source.position;
-            w2 = source.inverseMass;
-        }
-        else {
-            p2 = this.options.anchor;
-            w2 = 0;
-        }
-
-        var length = this.options.length;
-
-        for (var i = 0; i < targets.length; i++) {
-            var body = targets[i];
-
-            var v1 = body.velocity;
-            var p1 = body.position;
-            var w1 = body.inverseMass;
-
-            diffP.set(p1.sub(p2));
-            n.set(diffP.normalize());
-
-            var dist = diffP.norm() - length;
-
-            //rope effect
-            if (Math.abs(dist) < minLength) return;
-
-            if (source) diffV.set(v1.sub(v2));
-            else diffV.set(v1);
-
-            var effMass = 1 / (w1 + w2);
-            var gamma;
-            var beta;
-
-            if (period === 0) {
-                gamma = 0;
-                beta  = 1;
-            }
-            else {
-                var c = 4 * effMass * pi * dampingRatio / period;
-                var k = 4 * effMass * pi * pi / (period * period);
-
-                gamma = 1 / (c + dt*k);
-                beta  = dt*k / (c + dt*k);
-            }
-
-            var antiDrift = beta/dt * dist;
-            var lambda    = -(n.dot(diffV) + antiDrift) / (gamma + dt/effMass);
-
-            impulse.set(n.mult(dt*lambda));
-            body.applyImpulse(impulse);
-
-            if (source) source.applyImpulse(impulse.mult(-1));
-        }
-    };
-
-    module.exports = Distance;
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: david@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/physics/constraints/Surface',['require','exports','module','./Constraint','famous/math/Vector'],function(require, exports, module) {
-    var Constraint = require('./Constraint');
-    var Vector = require('famous/math/Vector');
-
-    /**
-     *  A constraint that keeps a physics body on a given implicit surface
-     *    regardless of other physical forces are applied to it.
-     *
-     *  @class Surface
-     *  @constructor
-     *  @extends Constraint
-     *  @param {Options} [options] An object of configurable options.
-     *  @param {Function} [options.equation] An implicitly defined surface f(x,y,z) = 0 that body is constrained to e.g. function(x,y,z) { x*x + y*y + z*z - r*r } corresponds to a sphere of radius r pixels.
-     *  @param {Number} [options.period] The spring-like reaction when the constraint is violated.
-     *  @param {Number} [options.dampingRatio] The damping-like reaction when the constraint is violated.
-     */
-    function Surface(options) {
-        this.options = Object.create(Surface.DEFAULT_OPTIONS);
-        if (options) this.setOptions(options);
-
-        this.J = new Vector();
-        this.impulse  = new Vector();
-
-        Constraint.call(this);
-    }
-
-    Surface.prototype = Object.create(Constraint.prototype);
-    Surface.prototype.constructor = Surface;
-
-    Surface.DEFAULT_OPTIONS = {
-        equation : undefined,
-        period : 0,
-        dampingRatio : 0
-    };
-
-    /** @const */ var epsilon = 1e-7;
-    /** @const */ var pi = Math.PI;
-
-    /**
-     * Basic options setter
-     *
-     * @method setOptions
-     * @param options {Objects}
-     */
-    Surface.prototype.setOptions = function setOptions(options) {
-        for (var key in options) this.options[key] = options[key];
-    };
-
-    /**
-     * Adds a surface impulse to a physics body.
-     *
-     * @method applyConstraint
-     * @param targets {Array.Body} Array of bodies to apply force to.
-     * @param source {Body} Not applicable
-     * @param dt {Number} Delta time
-     */
-    Surface.prototype.applyConstraint = function applyConstraint(targets, source, dt) {
-        var impulse = this.impulse;
-        var J       = this.J;
-        var options = this.options;
-
-        var f = options.equation;
-        var dampingRatio = options.dampingRatio;
-        var period = options.period;
-
-        for (var i = 0; i < targets.length; i++) {
-            var particle = targets[i];
-
-            var v = particle.velocity;
-            var p = particle.position;
-            var m = particle.mass;
-
-            var gamma;
-            var beta;
-
-            if (period === 0) {
-                gamma = 0;
-                beta = 1;
-            }
-            else {
-                var c = 4 * m * pi * dampingRatio / period;
-                var k = 4 * m * pi * pi / (period * period);
-
-                gamma = 1 / (c + dt*k);
-                beta  = dt*k / (c + dt*k);
-            }
-
-            var x = p.x;
-            var y = p.y;
-            var z = p.z;
-
-            var f0  = f(x, y, z);
-            var dfx = (f(x + epsilon, p, p) - f0) / epsilon;
-            var dfy = (f(x, y + epsilon, p) - f0) / epsilon;
-            var dfz = (f(x, y, p + epsilon) - f0) / epsilon;
-            J.setXYZ(dfx, dfy, dfz);
-
-            var antiDrift = beta/dt * f0;
-            var lambda = -(J.dot(v) + antiDrift) / (gamma + dt * J.normSquared() / m);
-
-            impulse.set(J.mult(dt*lambda));
-            particle.applyImpulse(impulse);
-        }
-    };
-
-    module.exports = Surface;
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: david@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/physics/constraints/Walls',['require','exports','module','./Constraint','./Wall','famous/math/Vector'],function(require, exports, module) {
-    var Constraint = require('./Constraint');
-    var Wall = require('./Wall');
-    var Vector = require('famous/math/Vector');
-
-    /**
-     *  Walls combines one or more Wall primitives and exposes a simple API to
-     *  interact with several walls at once. A common use case would be to set up
-     *  a bounding box for a physics body, that would collide with each side.
-     *
-     *  @class Walls
-     *  @constructor
-     *  @extends Constraint
-     *  @uses Wall
-     *  @param {Options} [options] An object of configurable options.
-     *  @param {Array} [options.sides] An array of sides e.g., [Walls.LEFT, Walls.TOP]
-     *  @param {Array} [options.size] The size of the bounding box of the walls.
-     *  @param {Array} [options.origin] The center of the wall relative to the size.
-     *  @param {Array} [options.drift] Baumgarte stabilization parameter. Makes constraints "loosely" (0) or "tightly" (1) enforced. Range : [0, 1]
-     *  @param {Array} [options.slop] Amount of penetration in pixels to ignore before collision event triggers.
-     *  @param {Array} [options.restitution] The energy ratio lost in a collision (0 = stick, 1 = elastic) The energy ratio lost in a collision (0 = stick, 1 = elastic)
-     *  @param {Array} [options.onContact] How to handle collision against the wall.
-     */
-    function Walls(options) {
-        this.options = Object.create(Walls.DEFAULT_OPTIONS);
-        if (options) this.setOptions(options);
-        _createComponents.call(this, options.sides || this.options.sides);
-
-        Constraint.call(this);
-    }
-
-    Walls.prototype = Object.create(Constraint.prototype);
-    Walls.prototype.constructor = Walls;
-    /**
-     * @property Walls.ON_CONTACT
-     * @type Object
-     * @extends Wall.ON_CONTACT
-     * @static
-     */
-    Walls.ON_CONTACT = Wall.ON_CONTACT;
-
-    /**
-     * An enumeration of common types of walls
-     *    LEFT, RIGHT, TOP, BOTTOM, FRONT, BACK
-     *    TWO_DIMENSIONAL, THREE_DIMENSIONAL
-     *
-     * @property Walls.SIDES
-     * @type Object
-     * @final
-     * @static
-     */
-    Walls.SIDES = {
-        LEFT   : 0,
-        RIGHT  : 1,
-        TOP    : 2,
-        BOTTOM : 3,
-        FRONT  : 4,
-        BACK   : 5,
-        TWO_DIMENSIONAL : [0, 1, 2, 3],
-        THREE_DIMENSIONAL : [0, 1, 2, 3, 4, 5]
-    };
-
-    Walls.DEFAULT_OPTIONS = {
-        sides : Walls.SIDES.TWO_DIMENSIONAL,
-        size : [window.innerWidth, window.innerHeight, 0],
-        origin : [.5, .5, .5],
-        drift : 0.5,
-        slop : 0,
-        restitution : 0.5,
-        onContact : Walls.ON_CONTACT.REFLECT
-    };
-
-    var _SIDE_NORMALS = {
-        0 : new Vector(1, 0, 0),
-        1 : new Vector(-1, 0, 0),
-        2 : new Vector(0, 1, 0),
-        3 : new Vector(0,-1, 0),
-        4 : new Vector(0, 0, 1),
-        5 : new Vector(0, 0,-1)
-    };
-
-    function _getDistance(side, size, origin) {
-        var distance;
-        var SIDES = Walls.SIDES;
-        switch (parseInt(side)) {
-            case SIDES.LEFT:
-                distance = size[0] * origin[0];
-                break;
-            case SIDES.TOP:
-                distance = size[1] * origin[1];
-                break;
-            case SIDES.FRONT:
-                distance = size[2] * origin[2];
-                break;
-            case SIDES.RIGHT:
-                distance = size[0] * (1 - origin[0]);
-                break;
-            case SIDES.BOTTOM:
-                distance = size[1] * (1 - origin[1]);
-                break;
-            case SIDES.BACK:
-                distance = size[2] * (1 - origin[2]);
-                break;
-        }
-        return distance;
-    }
-
-    /*
-     * Setter for options.
-     *
-     * @method setOptions
-     * @param options {Objects}
-     */
-    Walls.prototype.setOptions = function setOptions(options) {
-        var resizeFlag = false;
-        if (options.restitution !== undefined) _setOptionsForEach.call(this, {restitution : options.restitution});
-        if (options.drift !== undefined) _setOptionsForEach.call(this, {drift : options.drift});
-        if (options.slop !== undefined) _setOptionsForEach.call(this, {slop : options.slop});
-        if (options.onContact !== undefined) _setOptionsForEach.call(this, {onContact : options.onContact});
-        if (options.size !== undefined) resizeFlag = true;
-        if (options.sides !== undefined) this.options.sides = options.sides;
-        if (options.origin !== undefined) resizeFlag = true;
-        if (resizeFlag) this.setSize(options.size, options.origin);
-    };
-
-    function _createComponents(sides) {
-        this.components = {};
-        var components = this.components;
-
-        for (var i = 0; i < sides.length; i++) {
-            var side = sides[i];
-            components[i] = new Wall({
-                normal   : _SIDE_NORMALS[side].clone(),
-                distance : _getDistance(side, this.options.size, this.options.origin)
-            });
-        }
-    }
-
-    /*
-     * Setter for size.
-     *
-     * @method setOptions
-     * @param options {Objects}
-     */
-    Walls.prototype.setSize = function setSize(size, origin) {
-        origin = origin || this.options.origin;
-        if (origin.length < 3) origin[2] = 0.5;
-
-        this.forEach(function(wall, side) {
-            var d = _getDistance(side, size, origin);
-            wall.setOptions({distance : d});
-        });
-
-        this.options.size   = size;
-        this.options.origin = origin;
-    };
-
-    function _setOptionsForEach(options) {
-        this.forEach(function(wall) {
-            wall.setOptions(options);
-        });
-        for (var key in options) this.options[key] = options[key];
-    }
-
-    /**
-     * Adds an impulse to a physics body's velocity due to the walls constraint
-     *
-     * @method applyConstraint
-     * @param targets {Array.Body}  Array of bodies to apply the constraint to
-     * @param source {Body}         The source of the constraint
-     * @param dt {Number}           Delta time
-     */
-    Walls.prototype.applyConstraint = function applyConstraint(targets, source, dt) {
-        this.forEach(function(wall) {
-            wall.applyConstraint(targets, source, dt);
-        });
-    };
-
-    /**
-     * Apply a method to each wall making up the walls
-     *
-     * @method applyConstraint
-     * @param fn {Function}  Function that takes in a wall as its first parameter
-     */
-    Walls.prototype.forEach = function forEach(fn) {
-        for (var key in this.sides) fn(this.sides[key], key);
-    };
-
-    /**
-     * Rotates the walls by an angle in the XY-plane
-     *
-     * @method applyConstraint
-     * @param angle {Function}
-     */
-    Walls.prototype.rotateZ = function rotateZ(angle) {
-        this.forEach(function(wall) {
-            var n = wall.options.normal;
-            n.rotateZ(angle).put(n);
-        });
-    };
-
-    /**
-     * Rotates the walls by an angle in the YZ-plane
-     *
-     * @method applyConstraint
-     * @param angle {Function}
-     */
-    Walls.prototype.rotateX = function rotateX(angle) {
-        this.forEach(function(wall) {
-            var n = wall.options.normal;
-            n.rotateX(angle).put(n);
-        });
-    };
-
-    /**
-     * Rotates the walls by an angle in the XZ-plane
-     *
-     * @method applyConstraint
-     * @param angle {Function}
-     */
-    Walls.prototype.rotateY = function rotateY(angle) {
-        this.forEach(function(wall) {
-            var n = wall.options.normal;
-            n.rotateY(angle).put(n);
-        });
-    };
-
-    module.exports = Walls;
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: david@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-//TODO: test options manager
-define('famous/physics/forces/Repulsion',['require','exports','module','./Force','famous/math/Vector'],function(require, exports, module) {
-    var Force = require('./Force');
-    var Vector = require('famous/math/Vector');
-
-    /**
-     *  Repulsion is a force that repels (attracts) bodies away (towards)
-     *    each other. A repulsion of negative strength is attractive.
-     *
-     *  @class Repulsion
-     *  @constructor
-     *  @extends Force
-     *  @param {Object} options overwrites default options
-     */
-    function Repulsion(options) {
-        this.options = Object.create(Repulsion.DEFAULT_OPTIONS);
-        if (options) this.setOptions(options);
-
-        //registers
-        this.disp  = new Vector();
-
-        Force.call(this);
-    }
-
-    Repulsion.prototype = Object.create(Force.prototype);
-    Repulsion.prototype.constructor = Repulsion;
-    /**
-     * @property Repulsion.DECAY_FUNCTIONS
-     * @type Object
-     * @protected
-     * @static
-     */
-    Repulsion.DECAY_FUNCTIONS = {
-
-        /**
-         * A linear decay function
-         * @attribute LINEAR
-         * @type Function
-         * @param {Number} r distance from the source body
-         * @param {Number} cutoff the effective radius of influence
-         */
-        LINEAR : function(r, cutoff) {
-            return Math.max(1 - (1 / cutoff) * r, 0);
-        },
-
-        /**
-         * A Morse potential decay function (http://en.wikipedia.org/wiki/Morse_potential)
-         * @attribute MORSE
-         * @type Function
-         * @param {Number} r distance from the source body
-         * @param {Number} cutoff the minimum radius of influence
-         */
-        MORSE : function(r, cutoff) {
-            var r0 = (cutoff === 0) ? 100 : cutoff;
-            var rShifted = r + r0 * (1 - Math.log(2)); //shift by x-intercept
-            return Math.max(1 - Math.pow(1 - Math.exp(rShifted/r0 - 1), 2), 0);
-        },
-
-        /**
-         * An inverse distance decay function
-         * @attribute INVERSE
-         * @type Function
-         * @param {Number} r distance from the source body
-         * @param {Number} cutoff a distance shift to avoid singularities
-         */
-        INVERSE : function(r, cutoff) {
-            return 1 / (1 - cutoff + r);
-        },
-
-        /**
-         * An inverse squared distance decay function
-         * @attribute INVERSE
-         * @type Function
-         * @param {Number} r distance from the source body
-         * @param {Number} cutoff a distance shift to avoid singularities
-         */
-        GRAVITY : function(r, cutoff) {
-            return 1 / (1 - cutoff + r*r);
-        }
-    };
-
-    /**
-     * @property Repulsion.DEFAULT_OPTIONS
-     * @type Object
-     * @protected
-     * @static
-     */
-    Repulsion.DEFAULT_OPTIONS = {
-
-        /**
-         * The strength of the force
-         *    Range : [0, 100]
-         * @attribute strength
-         * @type Number
-         * @default 1
-         */
-        strength : 1,
-
-        /**
-         * The location of the force, if not another physics body
-         *
-         * @attribute anchor
-         * @type Number
-         * @default 0.01
-         * @optional
-         */
-        anchor : undefined,
-
-        /**
-         * The range of the repulsive force
-         * @attribute radii
-         * @type Array
-         * @default [0, Infinity]
-         */
-        range : [0, Infinity],
-
-        /**
-         * A normalization for the force to avoid singularities at the origin
-         * @attribute cutoff
-         * @type Number
-         * @default 0
-         */
-        cutoff : 0,
-
-        /**
-         * The maximum magnitude of the force
-         *    Range : [0, Infinity]
-         * @attribute cap
-         * @type Number
-         * @default Infinity
-         */
-        cap : Infinity,
-
-        /**
-         * The type of decay the repulsive force should have
-         * @attribute decayFunction
-         * @type Function
-         */
-        decayFunction : Repulsion.DECAY_FUNCTIONS.GRAVITY
-    };
-
-    /*
-     * Setter for options.
-     *
-     * @method setOptions
-     * @param {Objects} options
-     */
-    Repulsion.prototype.setOptions = function setOptions(options) {
-        if (options.anchor !== undefined) {
-            if (options.anchor.position instanceof Vector) this.options.anchor = options.anchor.position;
-            if (options.anchor   instanceof Array)  this.options.anchor = new Vector(options.anchor);
-            delete options.anchor;
-        }
-        for (var key in options) this.options[key] = options[key];
-    };
-
-    /**
-     * Adds a drag force to a physics body's force accumulator.
-     *
-     * @method applyForce
-     * @param targets {Array.Body}  Array of bodies to apply force to
-     * @param source {Body}         The source of the force
-     */
-    Repulsion.prototype.applyForce = function applyForce(targets, source) {
-        var options     = this.options;
-        var force       = this.force;
-        var disp        = this.disp;
-
-        var strength    = options.strength;
-        var anchor      = options.anchor || source.position;
-        var cap         = options.cap;
-        var cutoff      = options.cutoff;
-        var rMin        = options.range[0];
-        var rMax        = options.range[1];
-        var decayFn     = options.decayFunction;
-
-        if (strength === 0) return;
-
-        for (var index in targets) {
-            var particle = targets[index];
-
-            if (particle === source) continue;
-
-            var m1 = particle.mass;
-            var p1 = particle.position;
-
-            disp.set(p1.sub(anchor));
-            var r = disp.norm();
-
-            if (r < rMax && r > rMin) {
-                force.set(disp.normalize(strength * m1 * decayFn(r, cutoff)).cap(cap));
-                particle.applyForce(force);
-            }
-        }
-
-    };
-
-    module.exports = Repulsion;
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: david@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/physics/forces/RotationalDrag',['require','exports','module','./Drag'],function(require, exports, module) {
-    var Drag = require('./Drag');
-
-    /**
-     * Rotational drag is a force that opposes angular velocity.
-     *   Attach it to a physics body to slow down its rotation.
-     *
-     * @class RotationalDrag
-     * @constructor
-     * @extends Force
-     * @param {Object} options options to set on drag
-     */
-    function RotationalDrag(options) {
-        Drag.call(this, options);
-    }
-
-    RotationalDrag.prototype = Object.create(Drag.prototype);
-    RotationalDrag.prototype.constructor = RotationalDrag;
-
-    RotationalDrag.DEFAULT_OPTIONS = Drag.DEFAULT_OPTIONS;
-    RotationalDrag.FORCE_FUNCTIONS = Drag.FORCE_FUNCTIONS;
-
-    /**
-     * @property Repulsion.FORCE_FUNCTIONS
-     * @type Object
-     * @protected
-     * @static
-     */
-    RotationalDrag.FORCE_FUNCTIONS = {
-
-        /**
-         * A drag force proprtional to the angular velocity
-         * @attribute LINEAR
-         * @type Function
-         * @param {Vector} angularVelocity
-         * @return {Vector} drag force
-         */
-        LINEAR : function(angularVelocity) {
-            return angularVelocity;
-        },
-
-        /**
-         * A drag force proprtional to the square of the angular velocity
-         * @attribute QUADRATIC
-         * @type Function
-         * @param {Vector} angularVelocity
-         * @return {Vector} drag force
-         */
-        QUADRATIC : function(angularVelocity) {
-            return angularVelocity.mult(angularVelocity.norm());
-        }
-    };
-
-    /**
-     * Adds a rotational drag force to a physics body's torque accumulator.
-     *
-     * @method applyForce
-     * @param targets {Array.Body} Array of bodies to apply drag force to.
-     */
-    RotationalDrag.prototype.applyForce = function applyForce(targets) {
-        var strength       = this.options.strength;
-        var forceFunction  = this.options.forceFunction;
-        var force          = this.force;
-
-        //TODO: rotational drag as function of inertia
-        for (var index = 0; index < targets.length; index++) {
-            var particle = targets[index];
-            forceFunction(particle.angularVelocity).mult(-100*strength).put(force);
-            particle.applyTorque(force);
-        }
-    };
-
-    /*
-     * Setter for options.
-     *
-     * @method setOptions
-     * @param {Objects} options
-     */
-    RotationalDrag.prototype.setOptions = function setOptions(options) {
-        for (var key in options) this.options[key] = options[key];
-    };
-
-    module.exports = RotationalDrag;
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: david@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-//TODO: test inheritance
-define('famous/physics/forces/RotationalSpring',['require','exports','module','./Spring'],function(require, exports, module) {
-    var Spring = require('./Spring');
-
-    /**
-     *  A force that rotates a physics body back to target Euler angles.
-     *  Just as a spring translates a body to a particular X, Y, Z, location,
-     *  a rotational spring rotates a body to a particular X, Y, Z Euler angle.
-     *      Note: there is no physical agent that does this in the "real world"
-     *
-     *  @class RotationalSpring
-     *  @constructor
-     *  @extends Spring
-     *  @param {Object} options options to set on drag
-     */
-    function RotationalSpring(options) {
-        Spring.call(this, options);
-    }
-
-    RotationalSpring.prototype = Object.create(Spring.prototype);
-    RotationalSpring.prototype.constructor = RotationalSpring;
-
-    RotationalSpring.DEFAULT_OPTIONS = Spring.DEFAULT_OPTIONS;
-    RotationalSpring.FORCE_FUNCTIONS = Spring.FORCE_FUNCTIONS;
-
-    /**
-     * Adds a torque force to a physics body's torque accumulator.
-     *
-     * @method applyForce
-     * @param targets {Array.Body} Array of bodies to apply torque to.
-     */
-    RotationalSpring.prototype.applyForce = function applyForce(targets) {
-        var force        = this.force;
-        var options      = this.options;
-        var disp         = this.disp;
-
-        var stiffness    = options.stiffness;
-        var damping      = options.damping;
-        var restLength   = options.length;
-        var anchor       = options.anchor;
-
-        for (var i = 0; i < targets.length; i++) {
-            var target = targets[i];
-
-            disp.set(anchor.sub(target.orientation));
-            var dist = disp.norm() - restLength;
-
-            if (dist === 0) return;
-
-            //if dampingRatio specified, then override strength and damping
-            var m      = target.mass;
-            stiffness *= m;
-            damping   *= m;
-
-            force.set(disp.normalize(stiffness * this.forceFunction(dist, this.options.lMax)));
-
-            if (damping) force.set(force.add(target.angularVelocity.mult(-damping)));
-
-            target.applyTorque(force);
-        }
-    };
-
-    /**
-     * Calculates the potential energy of the rotational spring.
-     *
-     * @method getEnergy
-     * @param {Body} target The physics body attached to the spring
-     */
-    RotationalSpring.prototype.getEnergy = function getEnergy(target) {
-        var options     = this.options;
-        var restLength  = options.length;
-        var anchor      = options.anchor;
-        var strength    = options.stiffness;
-
-        var dist = anchor.sub(target.orientation).norm() - restLength;
-        return 0.5 * strength * dist * dist;
-    };
-
-    module.exports = RotationalSpring;
-
-
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
- *
- * Owner: david@famo.us
- * @license MPL 2.0
- * @copyright Famous Industries, Inc. 2014
- */
-
-define('famous/physics/forces/VectorField',['require','exports','module','./Force','famous/math/Vector'],function(require, exports, module) {
-    var Force = require('./Force');
-    var Vector = require('famous/math/Vector');
-
-    /**
-     *  A force that moves a physics body to a location with a spring motion.
-     *    The body can be moved to another physics body, or an anchor point.
-     *
-     *  @class VectorField
-     *  @constructor
-     *  @extends Force
-     *  @param {Object} options options to set on drag
-     */
-    function VectorField(options) {
-        this.options = Object.create(VectorField.DEFAULT_OPTIONS);
-        if (options) this.setOptions(options);
-
-        _setFieldOptions.call(this, this.options.field);
-        Force.call(this);
-
-        //registers
-        this.evaluation = new Vector(0,0,0);
-    }
-
-    VectorField.prototype = Object.create(Force.prototype);
-    VectorField.prototype.constructor = VectorField;
-
-    /**
-     * @property Spring.FORCE_FUNCTIONS
-     * @type Object
-     * @protected
-     * @static
-     */
-    VectorField.FIELDS = {
-        /**
-         * Constant force, e.g., gravity
-         * @attribute CONSTANT
-         * @type Function
-         * @param v {Vector}        Current position of physics body
-         * @param options {Object}  The direction of the force
-         *      Pass a {direction : Vector} into the VectorField options
-         * @return {Number} unscaled force
-         */
-        CONSTANT : function(v, options) {
-            return v.set(options.direction);
-        },
-
-        /**
-         * Linear force
-         * @attribute LINEAR
-         * @type Function
-         * @param v {Vector} Current position of physics body
-         * @return {Number} unscaled force
-         */
-        LINEAR : function(v) {
-            return v;
-        },
-
-        /**
-         * Radial force, e.g., Hookean spring
-         * @attribute RADIAL
-         * @type Function
-         * @param v {Vector} Current position of physics body
-         * @return {Number} unscaled force
-         */
-        RADIAL : function(v) {
-            return v.set(v.mult(-1, v));
-        },
-
-        /**
-         * Spherical force
-         * @attribute SPHERE_ATTRACTOR
-         * @type Function
-         * @param v {Vector}        Current position of physics body
-         * @param options {Object}  An object with the radius of the sphere
-         *      Pass a {radius : Number} into the VectorField options
-         * @return {Number} unscaled force
-         */
-        SPHERE_ATTRACTOR : function(v, options) {
-            return v.set(v.mult((options.radius - v.norm()) / v.norm()));
-        },
-
-        /**
-         * Point attractor force, e.g., Hookean spring with an anchor
-         * @attribute POINT_ATTRACTOR
-         * @type Function
-         * @param v {Vector}        Current position of physics body
-         * @param options {Object}  And object with the position of the attractor
-         *      Pass a {position : Vector} into the VectorField options
-         * @return {Number} unscaled force
-         */
-        POINT_ATTRACTOR : function(v, options) {
-            return v.set(options.position.sub(v));
-        }
-    };
-
-    /**
-     * @property VectorField.DEFAULT_OPTIONS
-     * @type Object
-     * @protected
-     * @static
-     */
-    VectorField.DEFAULT_OPTIONS = {
-
-        /**
-         * The strength of the force
-         *    Range : [0, 10]
-         * @attribute strength
-         * @type Number
-         * @default 1
-         */
-        strength : 1,
-
-        /**
-         * Type of vectorfield
-         *    Range : [0, 100]
-         * @attribute field
-         * @type Function
-         */
-        field : VectorField.FIELDS.CONSTANT
-    };
-
-    /**
-     * Basic options setter
-     *
-     * @method setOptions
-     * @param {Objects} options
-     */
-    VectorField.prototype.setOptions = function setOptions(options) {
-        for (var key in options) this.options[key] = options[key];
-    };
-
-    function _setFieldOptions(field) {
-        var FIELDS = VectorField.FIELDS;
-
-        switch (field) {
-            case FIELDS.CONSTANT:
-                if (!this.options.direction) this.options.direction = new Vector(0,1,0);
-                break;
-            case FIELDS.POINT_ATTRACTOR:
-                if (!this.options.position) this.options.position = new Vector(0,0,0);
-                break;
-            case FIELDS.SPHERE_ATTRACTOR:
-                if (!this.options.radius) this.options.radius = 1;
-                break;
-        }
-    }
-
-    function _evaluate(v) {
-        var evaluation = this.evaluation;
-        var field = this.options.field;
-        evaluation.set(v);
-        return field(evaluation, this.options);
-    }
-
-    /**
-     * Adds the vectorfield's force to a physics body's force accumulator.
-     *
-     * @method applyForce
-     * @param targets {Array.body} Array of bodies to apply force to.
-     */
-    VectorField.prototype.applyForce = function applyForce(targets) {
-        var force = this.force;
-        for (var i = 0; i < targets.length; i++) {
-            var particle = targets[i];
-            force.set(
-                _evaluate.call(this, particle.position)
-                .mult(particle.mass * this.options.strength)
-            );
-            particle.applyForce(force);
-        }
-    };
-
-    module.exports = VectorField;
 
 

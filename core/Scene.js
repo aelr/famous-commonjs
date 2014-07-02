@@ -18,7 +18,7 @@ var RenderNode = require('./RenderNode');
  *
  * @class Scene
  * @constructor
- * @param {Object} definition in the format of a render spec.
+ * @param {Object|Array|Spec} definition in the format of a render spec.
  */
 function Scene(definition) {
     this.id = null;
@@ -70,6 +70,7 @@ function _parseTransform(definition) {
     var transformDefinition = definition.transform;
     var opacity = definition.opacity;
     var origin = definition.origin;
+    var align = definition.align;
     var size = definition.size;
     var transform = Transform.identity;
     if (transformDefinition instanceof Array) {
@@ -90,6 +91,7 @@ function _parseTransform(definition) {
         transform: transform,
         opacity: opacity,
         origin: origin,
+        align: align,
         size: size
     });
     return result;
