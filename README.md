@@ -1,3 +1,16 @@
+[Deprecated]
+===========
+
+I'm pleased to announce that the Famo.us team has released an official CommonJS version.  So far, it is hosted here: "http://code.famo.us/famous/common/famous-0.2.2.tar.gz"
+
+...as part of their seed project: https://github.com/famous/browserify-seed
+
+Hopefully they will put up versions in npm, component, and bower soon.  In the interim, you can put it in a (package)|(bower).json via:
+
+"famous": "http://code.famo.us/famous/common/famous-0.2.2.tar.gz"
+
+The current version (0.2.2) is likely the last version that this repo will see.
+
 Famo.us CommonJS
 ================
   
